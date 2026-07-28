@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "쿠팡 순위 파인더",
+  "version": "0.1.0",
+  "description": "쿠팡 검색결과 페이지에서 내 상품이 몇 위인지 확인하는 셀러용 도구",
+  "permissions": ["activeTab", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.coupang.com/np/search*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "쿠팡 순위 파인더"
+  }
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>쿠팡 순위 파인더</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>쿠팡 순위 파인더</h1>
+    <p class="hint">쿠팡에서 키워드 검색한 페이지를 열어둔 상태에서 사용하세요.</p>
+  </header>
+
+  <main>
+    <label for="product-ids">내 상품ID (여러 개면 쉼표·줄바꿈으로 구분)</label>
+    <textarea id="product-ids" rows="3" placeholder="예: 7654321098, 1234567890"></textarea>
+
+    <button id="find-btn">현재 페이지에서 순위 찾기</button>
+
+    <div id="status" class="status" hidden></div>
+
+    <div id="summary" class="summary" hidden></div>
+
+    <ul id="results" class="results"></ul>
+
+    <details id="all-products-wrap" hidden>
+      <summary>전체 파싱 결과 보기 (파싱 확인용)</summary>
+      <ol id="all-products" class="all-products"></ol>
+    </details>
+  </main>
+</body>
+<script src="popup.js"></script>
+</html>
