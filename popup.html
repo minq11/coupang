@@ -6,28 +6,118 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header>
-    <h1>쿠팡 순위 파인더</h1>
-    <p class="hint">쿠팡에서 키워드 검색한 페이지를 열어둔 상태에서 사용하세요.</p>
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">랭</span>
+      <div class="brand-text">
+        <h1>쿠팡 순위 파인더</h1>
+        <p class="tagline">검색 순위를 한 번에</p>
+      </div>
+    </div>
+    <span id="api-pill" class="pill pill-neutral">API 확인중</span>
   </header>
 
-  <main>
-    <label for="product-ids">내 상품ID (여러 개면 쉼표·줄바꿈으로 구분)</label>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="rank" role="tab">순위 조회</button>
+    <button class="tab" data-tab="products" role="tab">내 상품</button>
+    <button class="tab" data-tab="settings" role="tab">설정</button>
+  </nav>
+
+  <!-- ================= 탭 1: 순위 조회 ================= -->
+  <section id="tab-rank" class="panel active">
+    <label class="field-label" for="product-ids">내 상품ID
+      <span class="field-sub">여러 개면 쉼표·줄바꿈으로 구분 (productId / itemId / vendorItemId 모두 인식)</span>
+    </label>
     <textarea id="product-ids" rows="3" placeholder="예: 7654321098, 1234567890"></textarea>
 
-    <button id="find-btn">현재 페이지에서 순위 찾기</button>
+    <button id="find-btn" class="btn btn-primary">
+      <span class="btn-label">현재 페이지에서 순위 찾기</span>
+      <span class="spinner" hidden></span>
+    </button>
 
-    <div id="status" class="status" hidden></div>
-
+    <div id="status" class="notice" hidden></div>
     <div id="summary" class="summary" hidden></div>
-
     <ul id="results" class="results"></ul>
 
     <details id="all-products-wrap" hidden>
       <summary>전체 파싱 결과 보기 (파싱 확인용)</summary>
       <ol id="all-products" class="all-products"></ol>
     </details>
-  </main>
+  </section>
+
+  <!-- ================= 탭 2: 내 상품 (API) ================= -->
+  <section id="tab-products" class="panel">
+    <!-- API 미설정 시 -->
+    <div id="products-empty" class="empty-state" hidden>
+      <div class="empty-icon">🔑</div>
+      <p class="empty-title">쿠팡 API 연결이 필요해요</p>
+      <p class="empty-desc">WING에서 등록한 내 상품을 불러오려면<br />설정 탭에서 API 키를 연결해주세요.</p>
+      <button id="goto-settings" class="btn btn-ghost">설정으로 이동</button>
+    </div>
+
+    <!-- API 설정 시 -->
+    <div id="products-main" hidden>
+      <div class="row-between">
+        <p class="section-desc">WING에 등록된 내 상품 목록</p>
+        <button id="load-products-btn" class="btn btn-small">
+          <span class="btn-label">불러오기</span>
+          <span class="spinner" hidden></span>
+        </button>
+      </div>
+
+      <div id="products-error" class="notice error" hidden></div>
+
+      <ul id="product-list" class="product-list"></ul>
+
+      <div id="products-skeleton" class="skeleton-list" hidden>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+      </div>
+
+      <button id="load-more-btn" class="btn btn-ghost" hidden>
+        <span class="btn-label">더 불러오기</span>
+        <span class="spinner" hidden></span>
+      </button>
+
+      <div class="sticky-action" id="add-selected-wrap" hidden>
+        <button id="add-selected-btn" class="btn btn-primary">
+          <span class="btn-label">선택한 상품을 순위 조회에 추가</span>
+          <span class="spinner" hidden></span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 탭 3: 설정 ================= -->
+  <section id="tab-settings" class="panel">
+    <div class="card">
+      <div class="card-title">쿠팡 WING Open API</div>
+      <div id="settings-status" class="kv-list">
+        <div class="kv"><span class="k">상태</span><span class="v" id="cfg-state">확인중…</span></div>
+        <div class="kv" id="cfg-vendor-row" hidden><span class="k">Vendor ID</span><span class="v mono" id="cfg-vendor"></span></div>
+        <div class="kv" id="cfg-key-row" hidden><span class="k">Access Key</span><span class="v mono" id="cfg-key"></span></div>
+      </div>
+      <button id="test-btn" class="btn btn-ghost" hidden>
+        <span class="btn-label">연결 테스트</span>
+        <span class="spinner" hidden></span>
+      </button>
+      <div id="test-result" class="notice" hidden></div>
+    </div>
+
+    <div class="card guide">
+      <div class="card-title">API 키 연결 방법</div>
+      <ol class="guide-steps">
+        <li>쿠팡 <b>WING</b> → 판매자지원 → <b>Open API 관리</b>에서 키 발급</li>
+        <li>확장 폴더의 <code>env.example.json</code>을 <code>env.json</code>으로 복사</li>
+        <li><code>env.json</code>에 Access Key · Secret Key · Vendor ID 입력</li>
+        <li><code>chrome://extensions</code>에서 확장 새로고침(↻)</li>
+      </ol>
+      <p class="guide-note">키는 내 PC의 env.json에만 저장되며 외부로 전송되지 않습니다.</p>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
 </body>
 <script src="popup.js"></script>
 </html>
