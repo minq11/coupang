@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "쿠팡 순위 파인더",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "쿠팡 검색결과 페이지에서 내 상품이 몇 위인지 확인하는 셀러용 도구",
   "permissions": ["activeTab", "storage"],
   "host_permissions": ["https://api-gateway.coupang.com/*"],

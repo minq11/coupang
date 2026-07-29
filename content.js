@@ -1,9 +1,13 @@
 /**
- * content.js — 쿠팡 검색결과 페이지 DOM 파서
+ * content.js — 쿠팡 검색결과 페이지 DOM 파서 + 다중 페이지 스캐너
  *
- * 셀러가 이미 열어둔 쿠팡 검색결과 페이지에서 상품 목록을 읽는다.
- * 팝업(popup.js)이 보내는 { type: 'PARSE_SEARCH_RESULTS' } 메시지에
- * 파싱 결과를 응답하는 것이 전부다. 백그라운드 자동 크롤링은 하지 않는다.
+ * 팝업에서 오는 메시지 두 종류에 응답한다:
+ *  - PARSE_SEARCH_RESULTS : 현재 페이지만 파싱 (동기)
+ *  - SCAN_PAGES           : 1페이지부터 maxPages까지 순서대로 스캔 (비동기)
+ *    다른 페이지는 같은 도메인 fetch + DOMParser로 읽으므로
+ *    셀러 브라우저의 쿠키/IP 그대로 동작하고, 요청 사이에 랜덤 딜레이를 둔다.
+ *
+ * 백그라운드 자동 크롤링은 하지 않는다 — 버튼을 누른 순간에만 동작.
  */
 
 // ============================================================
@@ -70,6 +74,10 @@ const SELECTORS = {
   ],
 };
 
+// 다중 페이지 스캔 시 요청 간 딜레이(ms) — 차단 리스크를 낮춘다
+const SCAN_DELAY_MIN = 700;
+const SCAN_DELAY_JITTER = 600;
+
 // ------------------------------------------------------------
 // 셀렉터 후보 배열을 앞에서부터 시도하는 헬퍼.
 // 아무것도 못 찾으면 null / 빈 배열을 돌려주고 절대 throw하지 않는다.
@@ -114,7 +122,7 @@ function toNumber(text) {
 // 상품 카드 하나 파싱. 어떤 필드를 못 찾아도 죽지 않고
 // 찾은 것만 채워서 돌려준다. 링크/ID를 아예 못 찾으면 null.
 // ------------------------------------------------------------
-function parseItem(item, position) {
+function parseItem(item, position, pageNo) {
   const link = queryFirst(item, SELECTORS.link);
   const href = link ? link.getAttribute('href') || '' : '';
 
@@ -142,8 +150,9 @@ function parseItem(item, position) {
   }
 
   return {
-    position,                                        // 페이지 내 전체 순위 (광고 포함, 1부터)
-    organicRank: null,                               // 광고 제외 순위 — 아래에서 채움
+    position,                                        // 전체 순위 (광고 포함, 페이지 누적, 1부터)
+    organicRank: null,                               // 광고 제외 순위 — 호출부에서 채움
+    page: pageNo,                                    // 몇 페이지에서 발견됐는지
     isAd: queryFirst(item, SELECTORS.adBadge) !== null,
     productId,
     itemId,
@@ -156,19 +165,20 @@ function parseItem(item, position) {
 }
 
 // ------------------------------------------------------------
-// 페이지 전체 파싱
+// 문서(현재 문서 또는 DOMParser 결과)에서 상품 목록 파싱.
+// position/organicRank는 startPosition/startOrganic부터 누적 계산.
 // ------------------------------------------------------------
-function parseSearchResults() {
-  const url = new URL(location.href);
-  const items = queryAllFirst(document, SELECTORS.productItems);
-
+function parseProductsFrom(doc, pageNo, startPosition, startOrganic) {
+  const items = queryAllFirst(doc, SELECTORS.productItems);
   const products = [];
-  let organicRank = 0;
+  let position = startPosition;
+  let organicRank = startOrganic;
 
-  items.forEach((item, idx) => {
+  items.forEach((item) => {
     try {
-      const p = parseItem(item, idx + 1);
+      const p = parseItem(item, position + 1, pageNo);
       if (!p) return;
+      position += 1;
       if (!p.isAd) {
         organicRank += 1;
         p.organicRank = organicRank;
@@ -179,26 +189,157 @@ function parseSearchResults() {
     }
   });
 
+  return { products, itemsFound: items.length, endPosition: position, endOrganic: organicRank };
+}
+
+function currentPageNo() {
+  try {
+    return parseInt(new URL(location.href).searchParams.get('page') || '1', 10) || 1;
+  } catch (e) {
+    return 1;
+  }
+}
+
+function currentKeyword() {
+  try {
+    return new URL(location.href).searchParams.get('q') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// ------------------------------------------------------------
+// 현재 페이지만 파싱 (기존 동작)
+// ------------------------------------------------------------
+function parseSearchResults() {
+  const pageNo = currentPageNo();
+  const { products, itemsFound } = parseProductsFrom(document, pageNo, 0, 0);
   return {
-    keyword: url.searchParams.get('q') || '',
-    page: url.searchParams.get('page') || '1',
+    keyword: currentKeyword(),
+    pagesScanned: 1,
+    firstPage: pageNo,
     pageUrl: location.href,
     parsedAt: new Date().toISOString(),
-    itemsFound: items.length,      // 목록 셀렉터가 잡은 카드 수 (0이면 셀렉터 점검 필요)
+    itemsFound,
     products,
   };
+}
+
+// ------------------------------------------------------------
+// 다중 페이지 스캔: 1페이지부터 maxPages까지.
+// 현재 열려있는 페이지 번호와 일치하면 fetch 없이 현재 DOM을 쓴다.
+// ------------------------------------------------------------
+let isScanning = false;
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// 현재 URL의 검색 파라미터를 유지한 채 page만 바꾼 URL 생성
+function buildPageUrl(pageNo) {
+  const url = new URL(location.href);
+  url.searchParams.set('page', String(pageNo));
+  return url.toString();
+}
+
+function reportProgress(current, max) {
+  try {
+    chrome.runtime.sendMessage({ type: 'SCAN_PROGRESS', current, max }, () => {
+      // 팝업이 닫혀 수신자가 없어도 조용히 무시
+      void chrome.runtime.lastError;
+    });
+  } catch (e) {
+    // 무시
+  }
+}
+
+async function scanPages(maxPages) {
+  if (isScanning) throw new Error('이미 스캔이 진행 중입니다. 잠시 후 다시 시도해주세요.');
+  isScanning = true;
+
+  try {
+    const keyword = currentKeyword();
+    const openPageNo = currentPageNo();
+    const all = [];
+    let position = 0;
+    let organic = 0;
+    let pagesScanned = 0;
+    let totalItemsFound = 0;
+
+    for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
+      reportProgress(pageNo, maxPages);
+
+      let doc;
+      if (pageNo === openPageNo) {
+        doc = document; // 지금 보고 있는 페이지는 fetch 없이 그대로 사용
+      } else {
+        let res;
+        try {
+          res = await fetch(buildPageUrl(pageNo), { credentials: 'include' });
+        } catch (e) {
+          throw new Error(`${pageNo}페이지 요청 실패: ${e.message}`);
+        }
+        if (!res.ok) {
+          // 접근 제한 등으로 실패하면 지금까지 모은 결과로 마무리
+          break;
+        }
+        const html = await res.text();
+        doc = new DOMParser().parseFromString(html, 'text/html');
+      }
+
+      const { products, itemsFound, endPosition, endOrganic } =
+        parseProductsFrom(doc, pageNo, position, organic);
+
+      totalItemsFound += itemsFound;
+
+      // 상품이 하나도 없으면 마지막 페이지를 넘은 것 (또는 셀렉터 문제)
+      if (itemsFound === 0) break;
+
+      all.push(...products);
+      position = endPosition;
+      organic = endOrganic;
+      pagesScanned += 1;
+
+      // 다음 페이지 요청 전 랜덤 딜레이 (마지막 페이지 뒤에는 불필요)
+      if (pageNo < maxPages) {
+        await delay(SCAN_DELAY_MIN + Math.random() * SCAN_DELAY_JITTER);
+      }
+    }
+
+    return {
+      keyword,
+      pagesScanned,
+      firstPage: 1,
+      pageUrl: location.href,
+      parsedAt: new Date().toISOString(),
+      itemsFound: totalItemsFound,
+      products: all,
+    };
+  } finally {
+    isScanning = false;
+  }
 }
 
 // ------------------------------------------------------------
 // 팝업에서 오는 메시지 처리
 // ------------------------------------------------------------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg && msg.type === 'PARSE_SEARCH_RESULTS') {
+  if (!msg) return;
+
+  if (msg.type === 'PARSE_SEARCH_RESULTS') {
     try {
       sendResponse({ ok: true, data: parseSearchResults() });
     } catch (e) {
       sendResponse({ ok: false, error: e.message });
     }
+    return; // 동기 응답
   }
-  // 동기 응답이므로 true를 반환하지 않는다
+
+  if (msg.type === 'SCAN_PAGES') {
+    const maxPages = Math.min(Math.max(parseInt(msg.maxPages, 10) || 5, 1), 10);
+    scanPages(maxPages)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true; // 비동기 응답 유지
+  }
 });

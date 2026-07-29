@@ -19,6 +19,7 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="rank" role="tab">순위 조회</button>
+    <button class="tab" data-tab="history" role="tab">기록</button>
     <button class="tab" data-tab="products" role="tab">내 상품</button>
     <button class="tab" data-tab="settings" role="tab">설정</button>
   </nav>
@@ -30,14 +31,37 @@
     </label>
     <textarea id="product-ids" rows="3" placeholder="예: 7654321098, 1234567890"></textarea>
 
+    <div class="field-label range-label">조회 범위</div>
+    <div class="segmented" id="depth-seg">
+      <button class="seg active" data-depth="1">이 페이지</button>
+      <button class="seg" data-depth="3">3페이지</button>
+      <button class="seg" data-depth="5">5페이지</button>
+      <button class="seg" data-depth="10">10페이지</button>
+    </div>
+
     <button id="find-btn" class="btn btn-primary">
-      <span class="btn-label">현재 페이지에서 순위 찾기</span>
+      <span class="btn-label">순위 찾기</span>
       <span class="spinner" hidden></span>
     </button>
 
+    <div id="scan-progress" class="progress" hidden>
+      <div class="progress-info" id="progress-text">조회 준비중…</div>
+      <div class="progress-track"><div class="progress-fill" id="progress-bar"></div></div>
+    </div>
+
     <div id="status" class="notice" hidden></div>
-    <div id="summary" class="summary" hidden></div>
+
+    <div id="summary-row" class="row-between summary-row" hidden>
+      <div id="summary" class="summary"></div>
+      <button id="csv-results-btn" class="btn btn-small" title="스캔한 전체 상품을 CSV로 저장">CSV</button>
+    </div>
+
     <ul id="results" class="results"></ul>
+
+    <details id="analysis-wrap" hidden>
+      <summary>📊 페이지 경쟁 분석</summary>
+      <div id="analysis-body" class="analysis-body"></div>
+    </details>
 
     <details id="all-products-wrap" hidden>
       <summary>전체 파싱 결과 보기 (파싱 확인용)</summary>
@@ -45,19 +69,55 @@
     </details>
   </section>
 
-  <!-- ================= 탭 2: 내 상품 (API) ================= -->
+  <!-- ================= 탭 2: 순위 기록 ================= -->
+  <section id="tab-history" class="panel">
+    <div class="row-between">
+      <p class="section-desc">순위를 조회할 때마다 자동으로 기록됩니다</p>
+      <div class="row-gap">
+        <button id="history-csv-btn" class="btn btn-small" title="전체 기록을 CSV로 저장">CSV</button>
+        <button id="history-clear-btn" class="btn btn-small btn-danger">전체 삭제</button>
+      </div>
+    </div>
+
+    <div id="history-empty" class="empty-state" hidden>
+      <div class="empty-icon">📈</div>
+      <p class="empty-title">아직 기록이 없어요</p>
+      <p class="empty-desc">순위 조회 탭에서 조회하면<br />키워드×상품별로 순위 변화가 쌓입니다.</p>
+    </div>
+
+    <ul id="history-list" class="history-list"></ul>
+  </section>
+
+  <!-- ================= 탭 3: 내 상품 (API) ================= -->
   <section id="tab-products" class="panel">
     <!-- API 미설정 시 -->
     <div id="products-empty" class="empty-state" hidden>
       <div class="empty-icon">🔑</div>
       <p class="empty-title">쿠팡 API 연결이 필요해요</p>
-      <p class="empty-desc">WING에서 등록한 내 상품을 불러오려면<br />설정 탭에서 API 키를 연결해주세요.</p>
+      <p class="empty-desc">WING에 등록한 내 상품과 주문 현황을 보려면<br />설정 탭에서 API 키를 연결해주세요.</p>
       <button id="goto-settings" class="btn btn-ghost">설정으로 이동</button>
     </div>
 
     <!-- API 설정 시 -->
     <div id="products-main" hidden>
-      <div class="row-between">
+      <div class="card order-card">
+        <div class="row-between">
+          <div class="card-title">오늘 주문 현황</div>
+          <button id="orders-refresh-btn" class="btn btn-small">
+            <span class="btn-label">새로고침</span>
+            <span class="spinner" hidden></span>
+          </button>
+        </div>
+        <div id="order-skeleton" class="skeleton-list slim" hidden>
+          <div class="skeleton-row slim"></div>
+        </div>
+        <div id="order-stats" class="stat-grid" hidden></div>
+        <div id="order-status-chips" class="chip-row" hidden></div>
+        <div id="order-error" class="notice error" hidden></div>
+        <div id="order-updated" class="cache-note" hidden></div>
+      </div>
+
+      <div class="row-between section-head">
         <p class="section-desc">WING에 등록된 내 상품 목록</p>
         <button id="load-products-btn" class="btn btn-small">
           <span class="btn-label">불러오기</span>
@@ -89,7 +149,7 @@
     </div>
   </section>
 
-  <!-- ================= 탭 3: 설정 ================= -->
+  <!-- ================= 탭 4: 설정 ================= -->
   <section id="tab-settings" class="panel">
     <div class="card">
       <div class="card-title">쿠팡 WING Open API</div>
@@ -114,6 +174,14 @@
         <li><code>chrome://extensions</code>에서 확장 새로고침(↻)</li>
       </ol>
       <p class="guide-note">키는 내 PC의 env.json에만 저장되며 외부로 전송되지 않습니다.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">데이터</div>
+      <div class="kv-list">
+        <div class="kv"><span class="k">순위 기록</span><span class="v" id="cfg-history-count">-</span></div>
+      </div>
+      <p class="guide-note">기록은 이 브라우저의 확장 저장소에만 보관됩니다. (키워드×상품당 최근 150회)</p>
     </div>
   </section>
 

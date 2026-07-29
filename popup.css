@@ -566,3 +566,323 @@ details summary {
   from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ============================================================
+   v0.3 추가 컴포넌트
+   ============================================================ */
+
+.row-gap { display: flex; gap: 6px; align-items: center; }
+
+.section-head { margin-top: 14px; }
+
+.btn-danger { background: var(--danger-soft); color: var(--danger); }
+
+/* ---------- 조회 범위 세그먼트 컨트롤 ---------- */
+
+.range-label { margin-top: 12px; }
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.seg {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.seg.active {
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: var(--shadow);
+}
+
+/* ---------- 스캔 진행률 ---------- */
+
+.progress { margin-top: 12px; }
+
+.progress-info {
+  font-size: 12px;
+  color: var(--text-sub);
+  margin-bottom: 5px;
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent-grad);
+  transition: width 0.3s ease;
+}
+
+/* ---------- 결과 요약 행 ---------- */
+
+.summary-row { margin-top: 12px; }
+.summary-row .summary { margin-top: 0; }
+
+/* ---------- 순위 변화(델타) 뱃지 ---------- */
+
+.delta {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.delta.up { background: var(--success-soft); color: var(--success); }
+.delta.down { background: var(--danger-soft); color: var(--danger); }
+.delta.same { background: var(--border); color: var(--text-sub); }
+.delta.new { background: var(--accent-soft); color: var(--accent); }
+
+/* ---------- 페이지 경쟁 분석 ---------- */
+
+.analysis-body {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.stat-tile {
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: var(--bg);
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.stat-label {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-sub);
+}
+
+.hist-title {
+  margin-top: 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-sub);
+}
+
+.hist-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 44px;
+  margin-top: 6px;
+}
+
+.hist-bar {
+  flex: 1;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent-soft);
+  position: relative;
+  min-height: 2px;
+}
+
+.hist-bar .fill {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent-grad);
+  opacity: 0.85;
+}
+
+.hist-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  font-size: 9.5px;
+  color: var(--text-sub);
+}
+
+.my-insight {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.my-insight b { color: var(--accent); }
+
+/* ---------- 순위 기록 탭 ---------- */
+
+.history-list { list-style: none; margin-top: 10px; }
+
+.history-card {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.h-keyword {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.h-name {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-sub);
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.h-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.h-rank {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.h-rank .out { color: var(--text-sub); font-size: 12.5px; font-weight: 700; }
+
+.sparkline { flex-shrink: 0; }
+
+.sparkline path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sparkline circle { fill: var(--accent); }
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.icon-btn:hover { background: var(--danger-soft); color: var(--danger); }
+
+.h-entries {
+  margin: 6px 0 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--text-sub);
+}
+
+.h-entries li {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-top: 1px dashed var(--border);
+}
+
+/* ---------- 주문 현황 카드 ---------- */
+
+.order-card { margin-bottom: 4px; }
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+.chip b { color: var(--text); }
+
+.chip.clickable { cursor: pointer; transition: border-color 0.15s, color 0.15s; }
+.chip.clickable:hover { border-color: var(--accent); color: var(--accent); }
+
+.cache-note {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--text-sub);
+}
+
+.skeleton-list.slim { margin-top: 8px; }
+.skeleton-row.slim { height: 40px; }
+
+/* ---------- 키워드 제안 ---------- */
+
+.kw-toggle-btn {
+  margin-top: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.kw-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.kw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}

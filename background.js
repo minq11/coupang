@@ -80,6 +80,11 @@ const handlers = {
     const api = await getApi();
     return { product: await api.getSellerProduct(msg.sellerProductId) };
   },
+
+  async API_ORDER_SUMMARY() {
+    const api = await getApi();
+    return { summary: await api.getTodayOrderSummary() };
+  },
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

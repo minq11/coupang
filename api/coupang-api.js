@@ -21,7 +21,32 @@ const ENDPOINTS = {
   listProducts: '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products',
   // 등록상품 단건 상세 조회 (뒤에 /{sellerProductId} 붙여서 사용)
   getProduct: '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products',
+  // 발주서(주문) 일단위 조회 — {vendorId} 자리에 판매자ID가 들어간다
+  ordersheets: (vendorId) =>
+    `/v2/providers/openapi/apis/api/v4/vendors/${vendorId}/ordersheets`,
 };
+
+// 주문 상태 코드 → 한국어 라벨 (팝업 표시용으로도 내려준다)
+export const ORDER_STATUS_LABELS = {
+  ACCEPT: '결제완료',
+  INSTRUCT: '상품준비중',
+  DEPARTURE: '배송지시',
+  DELIVERING: '배송중',
+  FINAL_DELIVERY: '배송완료',
+};
+
+// 발주서 1건의 예상 매출액. 응답 필드명이 유동적이라 방어적으로 계산:
+// orderItems[].orderPrice가 있으면 그 합, 없으면 salesPrice × 수량으로 추정.
+function orderRevenue(order) {
+  if (!order || !Array.isArray(order.orderItems)) return 0;
+  return order.orderItems.reduce((sum, item) => {
+    if (!item) return sum;
+    if (typeof item.orderPrice === 'number') return sum + item.orderPrice;
+    const unit = typeof item.salesPrice === 'number' ? item.salesPrice : 0;
+    const qty = typeof item.shippingCount === 'number' ? item.shippingCount : 1;
+    return sum + unit * qty;
+  }, 0);
+}
 
 // signed-date: UTC 기준 "yyMMdd'T'HHmmss'Z'" 형식 (예: 260729T093000Z)
 function signedDateNow() {
@@ -151,6 +176,74 @@ export class CoupangApi {
       `${ENDPOINTS.getProduct}/${sellerProductId}`
     );
     return (body && body.data) || null;
+  }
+
+  /**
+   * 발주서(주문) 일단위 조회 — status별로 페이징
+   * @param {{dateFrom: string, dateTo: string, status: string, nextToken?: string, maxPerPage?: number}} opts
+   */
+  async listOrderSheets(opts) {
+    const body = await this.request('GET', ENDPOINTS.ordersheets(this.vendorId), {
+      createdAtFrom: opts.dateFrom,
+      createdAtTo: opts.dateTo,
+      status: opts.status,
+      maxPerPage: opts.maxPerPage || 50,
+      nextToken: opts.nextToken || undefined,
+    });
+    return {
+      orders: (body && body.data) || [],
+      nextToken: (body && body.nextToken) || null,
+    };
+  }
+
+  /**
+   * 오늘(KST) 주문 요약: 상태별 건수 + 예상 매출 합계.
+   * 상태 코드는 쿠팡 발주서 API의 진행 단계. 일부 상태 조회가 실패해도
+   * 성공한 상태만으로 요약을 만든다 (전부 실패하면 throw).
+   */
+  async getTodayOrderSummary() {
+    // KST(UTC+9) 기준 오늘 날짜 "YYYY-MM-DD"
+    const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+
+    const statuses = Object.keys(ORDER_STATUS_LABELS);
+    const counts = {};
+    let total = 0;
+    let revenue = 0;
+    let hasMore = false;
+    let anySuccess = false;
+    let lastError = null;
+
+    for (const status of statuses) {
+      try {
+        let nextToken = null;
+        let count = 0;
+        let pages = 0;
+        do {
+          const res = await this.listOrderSheets({
+            dateFrom: today,
+            dateTo: today,
+            status,
+            nextToken,
+          });
+          count += res.orders.length;
+          revenue += res.orders.reduce((sum, o) => sum + orderRevenue(o), 0);
+          nextToken = res.nextToken;
+          pages += 1;
+        } while (nextToken && pages < 5); // 상태당 최대 250건까지 (그 이상은 hasMore)
+        if (nextToken) hasMore = true;
+        counts[status] = count;
+        total += count;
+        anySuccess = true;
+      } catch (e) {
+        lastError = e.message;
+      }
+    }
+
+    if (!anySuccess) {
+      throw new Error(lastError || '주문 조회에 실패했습니다.');
+    }
+
+    return { date: today, total, revenue, counts, hasMore, labels: ORDER_STATUS_LABELS };
   }
 
   /** 연결 테스트: 상품 1개만 조회해본다 */
