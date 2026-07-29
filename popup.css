@@ -886,3 +886,73 @@ details summary {
   gap: 5px;
   margin-top: 7px;
 }
+
+/* ============================================================
+   v0.4 추가 컴포넌트
+   ============================================================ */
+
+/* ---------- 현재 탭 상태 ---------- */
+
+.tab-status {
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.tab-status.neutral { background: var(--border); color: var(--text-sub); }
+.tab-status.ok { background: var(--success-soft); color: var(--success); }
+.tab-status.warn { background: var(--warn-soft); color: var(--warn-text); }
+
+.open-search-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.open-search-row .text-input { flex: 1; margin: 0; }
+.open-search-row .btn-small { flex-shrink: 0; }
+
+.ids-label { margin-top: 12px; }
+
+/* ---------- 텍스트 인풋 ---------- */
+
+.text-input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---------- 키 입력 폼 / 데이터 카드 ---------- */
+
+.key-form-note { margin-bottom: 2px; }
+
+.key-form-actions { margin-top: 10px; }
+
+.btn-flex { flex: 1; margin-top: 0; }
+
+/* ---------- 배송 뱃지 ---------- */
+
+.badge.rocket { background: #e7f0fe; color: #1d6ce0; }
+
+@media (prefers-color-scheme: dark) {
+  .badge.rocket { background: #1a2c4a; color: #6ea8ff; }
+}
+
+.badge + .badge,
+.badge + .delta { margin-left: 4px; }

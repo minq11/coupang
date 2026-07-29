@@ -26,15 +26,26 @@
 
   <!-- ================= 탭 1: 순위 조회 ================= -->
   <section id="tab-rank" class="panel active">
-    <label class="field-label" for="product-ids">내 상품ID
-      <span class="field-sub">여러 개면 쉼표·줄바꿈으로 구분 (productId / itemId / vendorItemId 모두 인식)</span>
+    <!-- 현재 탭 상태: 쿠팡 검색 페이지인지 먼저 보여준다 -->
+    <div id="tab-status" class="tab-status neutral">현재 탭 확인중…</div>
+
+    <!-- 검색 페이지가 아닐 때: 키워드로 바로 검색 열기 -->
+    <div id="open-search-row" class="open-search-row" hidden>
+      <input id="keyword-input" class="text-input" type="text"
+             placeholder="검색할 키워드 입력 (예: 텀블러)" />
+      <button id="open-search-btn" class="btn btn-small">쿠팡 검색 열기</button>
+    </div>
+
+    <label class="field-label ids-label" for="product-ids">내 상품
+      <span class="field-sub">상품 페이지 주소(URL)를 그대로 붙여넣어도 됩니다. 여러 개면 쉼표·줄바꿈으로 구분.</span>
     </label>
-    <textarea id="product-ids" rows="3" placeholder="예: 7654321098, 1234567890"></textarea>
+    <textarea id="product-ids" rows="3"
+      placeholder="예: https://www.coupang.com/vp/products/7654321098&#10;또는 상품ID: 7654321098"></textarea>
 
     <div class="field-label range-label">조회 범위</div>
     <div class="segmented" id="depth-seg">
-      <button class="seg active" data-depth="1">이 페이지</button>
-      <button class="seg" data-depth="3">3페이지</button>
+      <button class="seg" data-depth="1">이 페이지</button>
+      <button class="seg active" data-depth="3">3페이지</button>
       <button class="seg" data-depth="5">5페이지</button>
       <button class="seg" data-depth="10">10페이지</button>
     </div>
@@ -57,6 +68,11 @@
     </div>
 
     <ul id="results" class="results"></ul>
+
+    <button id="retry-deep-btn" class="btn btn-ghost" hidden>
+      <span class="btn-label">10페이지까지 다시 조회</span>
+      <span class="spinner" hidden></span>
+    </button>
 
     <details id="analysis-wrap" hidden>
       <summary>📊 페이지 경쟁 분석</summary>
@@ -165,15 +181,22 @@
       <div id="test-result" class="notice" hidden></div>
     </div>
 
-    <div class="card guide">
-      <div class="card-title">API 키 연결 방법</div>
-      <ol class="guide-steps">
-        <li>쿠팡 <b>WING</b> → 판매자지원 → <b>Open API 관리</b>에서 키 발급</li>
-        <li>확장 폴더의 <code>env.example.json</code>을 <code>env.json</code>으로 복사</li>
-        <li><code>env.json</code>에 Access Key · Secret Key · Vendor ID 입력</li>
-        <li><code>chrome://extensions</code>에서 확장 새로고침(↻)</li>
-      </ol>
-      <p class="guide-note">키는 내 PC의 env.json에만 저장되며 외부로 전송되지 않습니다.</p>
+    <div class="card">
+      <div class="card-title">API 키 입력</div>
+      <p class="guide-note key-form-note">쿠팡 <b>WING</b> → 판매자지원 → <b>Open API 관리</b>에서 발급한 키를 입력하세요.
+        키는 이 브라우저에만 저장되며 쿠팡 API 서버 외에는 전송되지 않습니다.</p>
+      <input id="key-access" class="text-input" type="text" placeholder="Access Key" autocomplete="off" />
+      <input id="key-secret" class="text-input" type="password" placeholder="Secret Key" autocomplete="off" />
+      <input id="key-vendor" class="text-input" type="text" placeholder="Vendor ID (예: A00123456)" autocomplete="off" />
+      <div class="row-gap key-form-actions">
+        <button id="save-keys-btn" class="btn btn-primary btn-flex">
+          <span class="btn-label">저장</span>
+          <span class="spinner" hidden></span>
+        </button>
+        <button id="clear-keys-btn" class="btn btn-ghost btn-flex">저장된 키 삭제</button>
+      </div>
+      <p class="guide-note">개발자라면 <code>env.example.json</code>을 <code>env.json</code>으로 복사해 써도 됩니다.
+        env.json이 있으면 그 값이 우선합니다.</p>
     </div>
 
     <div class="card">
@@ -181,7 +204,13 @@
       <div class="kv-list">
         <div class="kv"><span class="k">순위 기록</span><span class="v" id="cfg-history-count">-</span></div>
       </div>
-      <p class="guide-note">기록은 이 브라우저의 확장 저장소에만 보관됩니다. (키워드×상품당 최근 150회)</p>
+      <div class="row-gap key-form-actions">
+        <button id="backup-btn" class="btn btn-ghost btn-flex">기록 백업(JSON)</button>
+        <button id="restore-btn" class="btn btn-ghost btn-flex">백업 가져오기</button>
+      </div>
+      <input id="restore-file" type="file" accept=".json,application/json" hidden />
+      <p class="guide-note">기록은 이 브라우저의 확장 저장소에만 보관됩니다. (키워드×상품당 최근 150회)
+        브라우저를 옮길 때는 백업 파일로 이전하세요.</p>
     </div>
   </section>
 

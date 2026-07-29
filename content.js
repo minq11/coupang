@@ -72,6 +72,15 @@ const SELECTORS = {
     '[class*="ad-badge"]',
     '[data-adsplatform]',
   ],
+
+  // 로켓배송/판매자로켓 등 배송 뱃지 — img의 alt 텍스트로 종류를 구분한다
+  deliveryBadge: [
+    'img[alt*="로켓"]',
+    'img[src*="logo_rocket"]',
+    'img[src*="rocket_logo"]',
+    'img[src*="rocketwow"]',
+    '[class*="rocket"] img',
+  ],
 };
 
 // 다중 페이지 스캔 시 요청 간 딜레이(ms) — 차단 리스크를 낮춘다
@@ -149,11 +158,20 @@ function parseItem(item, position, pageNo) {
     return null;
   }
 
+  // 배송 뱃지: 로켓배송/판매자로켓/로켓직구/로켓프레시 등 (alt 텍스트 기준)
+  let delivery = null;
+  const deliveryEl = queryFirst(item, SELECTORS.deliveryBadge);
+  if (deliveryEl) {
+    const alt = (deliveryEl.getAttribute('alt') || '').trim();
+    delivery = alt && alt.includes('로켓') ? alt : '로켓';
+  }
+
   return {
     position,                                        // 전체 순위 (광고 포함, 페이지 누적, 1부터)
     organicRank: null,                               // 광고 제외 순위 — 호출부에서 채움
     page: pageNo,                                    // 몇 페이지에서 발견됐는지
     isAd: queryFirst(item, SELECTORS.adBadge) !== null,
+    delivery,
     productId,
     itemId,
     vendorItemId,
@@ -321,6 +339,93 @@ async function scanPages(maxPages) {
 }
 
 // ------------------------------------------------------------
+// 검색결과 페이지 위에 내 상품 하이라이트 (테두리 + 순위 뱃지)
+// 팝업 없이도 페이지에서 바로 내 상품 위치가 보이게 한다.
+// ------------------------------------------------------------
+const HL_STYLE_ID = '__crf-highlight-style';
+const HL_CLASS = '__crf-hit';
+const HL_BADGE_CLASS = '__crf-badge';
+
+function ensureHighlightStyle() {
+  if (document.getElementById(HL_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = HL_STYLE_ID;
+  style.textContent = `
+    .${HL_CLASS} {
+      outline: 3px solid #e84118 !important;
+      outline-offset: -3px;
+      border-radius: 8px;
+    }
+    .${HL_BADGE_CLASS} {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 999;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: #e84118;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      pointer-events: none;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.' + HL_CLASS).forEach((el) => el.classList.remove(HL_CLASS));
+  document.querySelectorAll('.' + HL_BADGE_CLASS).forEach((el) => el.remove());
+}
+
+/**
+ * @param {Array<{ids: string[], label: string}>} targets
+ * @returns {number} 현재 페이지에서 하이라이트된 개수
+ */
+function highlightMyProducts(targets) {
+  clearHighlights();
+  if (!Array.isArray(targets) || targets.length === 0) return 0;
+  ensureHighlightStyle();
+
+  const items = queryAllFirst(document, SELECTORS.productItems);
+  let hits = 0;
+
+  items.forEach((item) => {
+    try {
+      const p = parseItem(item, 0, 0); // ID 추출 용도로만 사용
+      if (!p) return;
+      const target = targets.find((t) =>
+        (p.productId && t.ids.includes(p.productId)) ||
+        (p.itemId && t.ids.includes(p.itemId)) ||
+        (p.vendorItemId && t.ids.includes(p.vendorItemId))
+      );
+      if (!target) return;
+
+      item.classList.add(HL_CLASS);
+      if (getComputedStyle(item).position === 'static') {
+        item.style.position = 'relative';
+      }
+      const badge = document.createElement('div');
+      badge.className = HL_BADGE_CLASS;
+      badge.textContent = target.label;
+      item.appendChild(badge);
+      hits += 1;
+
+      // 첫 번째 히트로 스크롤 (한 번만)
+      if (hits === 1) {
+        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } catch (e) {
+      // 하나 실패해도 계속
+    }
+  });
+
+  return hits;
+}
+
+// ------------------------------------------------------------
 // 팝업에서 오는 메시지 처리
 // ------------------------------------------------------------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -341,5 +446,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then((data) => sendResponse({ ok: true, data }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true; // 비동기 응답 유지
+  }
+
+  if (msg.type === 'HIGHLIGHT_MY_PRODUCTS') {
+    try {
+      sendResponse({ ok: true, hits: highlightMyProducts(msg.targets) });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
+    return;
+  }
+
+  if (msg.type === 'CLEAR_HIGHLIGHTS') {
+    try {
+      clearHighlights();
+      sendResponse({ ok: true });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
+    return;
   }
 });

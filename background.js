@@ -2,7 +2,9 @@
  * background.js — MV3 서비스워커 (모듈)
  *
  * 역할:
- *  1. env.json(API 키 파일) 로드 — env.example.json을 복사해서 만든 파일
+ *  1. API 키 로드 — 두 가지 소스를 순서대로 시도:
+ *     ① env.json (개발자용: env.example.json을 복사해서 만든 파일)
+ *     ② chrome.storage.local의 apiKeys (일반 사용자용: 설정 탭에서 직접 입력)
  *  2. 팝업에서 오는 API_* 메시지를 받아 쿠팡 WING Open API 호출 후 응답
  *
  * 쿠팡 API는 CORS 때문에 팝업/콘텐츠 스크립트에서 직접 못 부르므로
@@ -12,28 +14,61 @@
 import { CoupangApi } from './api/coupang-api.js';
 
 // ------------------------------------------------------------
-// env.json 로드
-// - 확장 폴더 안의 env.json을 fetch로 읽는다 (없으면 "미설정" 상태)
-// - 키를 바꿨으면 chrome://extensions에서 확장 새로고침(↻) 필요
+// 설정 로드
+// cachedConfig: undefined = 아직 안 읽음, null = 미설정
+// env.json을 바꿨으면 chrome://extensions에서 확장 새로고침(↻) 필요.
+// 설정 탭에서 저장한 키는 즉시 반영된다.
 // ------------------------------------------------------------
-let cachedConfig; // undefined = 아직 안 읽음, null = 파일 없음/불완전
+let cachedConfig;
+let configSource = null; // 'env' | 'storage' | null
 
-async function loadConfig() {
-  if (cachedConfig !== undefined) return cachedConfig;
+function normalizeConfig(accessKey, secretKey, vendorId) {
+  const config = {
+    accessKey: (accessKey || '').trim(),
+    secretKey: (secretKey || '').trim(),
+    vendorId: (vendorId || '').trim(),
+  };
+  return config.accessKey && config.secretKey && config.vendorId ? config : null;
+}
+
+async function loadConfig(force) {
+  if (!force && cachedConfig !== undefined) return cachedConfig;
+
+  cachedConfig = null;
+  configSource = null;
+
+  // ① env.json (있으면 우선)
   try {
     const res = await fetch(chrome.runtime.getURL('env.json'));
-    if (!res.ok) throw new Error('env.json not found');
-    const raw = await res.json();
-    const config = {
-      accessKey: (raw.COUPANG_ACCESS_KEY || '').trim(),
-      secretKey: (raw.COUPANG_SECRET_KEY || '').trim(),
-      vendorId: (raw.COUPANG_VENDOR_ID || '').trim(),
-    };
-    cachedConfig =
-      config.accessKey && config.secretKey && config.vendorId ? config : null;
+    if (res.ok) {
+      const raw = await res.json();
+      const config = normalizeConfig(
+        raw.COUPANG_ACCESS_KEY, raw.COUPANG_SECRET_KEY, raw.COUPANG_VENDOR_ID
+      );
+      if (config) {
+        cachedConfig = config;
+        configSource = 'env';
+        return cachedConfig;
+      }
+    }
   } catch (e) {
-    cachedConfig = null;
+    // env.json 없음 — 다음 소스로
   }
+
+  // ② 설정 탭에서 저장한 키
+  try {
+    const { apiKeys } = await chrome.storage.local.get('apiKeys');
+    if (apiKeys) {
+      const config = normalizeConfig(apiKeys.accessKey, apiKeys.secretKey, apiKeys.vendorId);
+      if (config) {
+        cachedConfig = config;
+        configSource = 'storage';
+      }
+    }
+  } catch (e) {
+    // 저장소 오류 — 미설정으로 처리
+  }
+
   return cachedConfig;
 }
 
@@ -41,8 +76,8 @@ async function getApi() {
   const config = await loadConfig();
   if (!config) {
     throw new Error(
-      'API 키가 설정되지 않았습니다. env.example.json을 env.json으로 복사해 ' +
-      '키를 채운 뒤, chrome://extensions에서 확장을 새로고침해주세요.'
+      'API 키가 설정되지 않았습니다. 설정 탭에서 키를 입력하거나, ' +
+      'env.example.json을 env.json으로 복사해 키를 채워주세요.'
     );
   }
   return new CoupangApi(config);
@@ -58,9 +93,27 @@ const handlers = {
     if (!config) return { configured: false };
     return {
       configured: true,
+      source: configSource, // 'env' | 'storage'
       vendorId: config.vendorId,
       accessKeyMasked: config.accessKey.slice(0, 4) + '****',
     };
+  },
+
+  // 설정 탭에서 키 저장 (env.json이 있으면 env.json이 계속 우선한다)
+  async API_SAVE_KEYS(msg) {
+    const config = normalizeConfig(msg.accessKey, msg.secretKey, msg.vendorId);
+    if (!config) {
+      throw new Error('세 값(Access Key, Secret Key, Vendor ID)을 모두 입력해주세요.');
+    }
+    await chrome.storage.local.set({ apiKeys: config });
+    await loadConfig(true); // 캐시 갱신
+    return { saved: true, source: configSource };
+  },
+
+  async API_CLEAR_KEYS() {
+    await chrome.storage.local.remove('apiKeys');
+    await loadConfig(true);
+    return { cleared: true };
   },
 
   async API_TEST() {

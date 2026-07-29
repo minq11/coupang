@@ -51,11 +51,33 @@ function sendToBackground(msg) {
   });
 }
 
-// "123, 456\n789" → ['123', '456', '789'] (중복 제거)
+// 입력창 텍스트에서 상품ID 목록 추출 (중복 제거).
+// 쿠팡 상품 URL을 통째로 붙여넣어도 주소에서 ID를 뽑아준다.
 function parseIds(raw) {
-  return [...new Set(
-    raw.split(/[\s,;]+/).map((s) => s.trim()).filter((s) => s.length > 0)
-  )];
+  const ids = new Set();
+  let rest = raw;
+
+  // ① URL에서 추출: /vp/products/{productId} 우선, 없으면 itemId/vendorItemId 쿼리
+  for (const url of raw.match(/https?:\/\/[^\s,;"']+/g) || []) {
+    const m = url.match(/\/vp\/products\/(\d+)/);
+    if (m) {
+      ids.add(m[1]);
+    } else {
+      try {
+        const qs = new URL(url).searchParams;
+        const alt = qs.get('itemId') || qs.get('vendorItemId');
+        if (alt) ids.add(alt);
+      } catch (e) {
+        // URL 파싱 실패는 무시
+      }
+    }
+    rest = rest.replace(url, ' ');
+  }
+
+  // ② 나머지 토큰은 ID 직접 입력으로 처리
+  rest.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean).forEach((s) => ids.add(s));
+
+  return [...ids];
 }
 
 const fmtDateTime = new Intl.DateTimeFormat('ko-KR', {
@@ -128,7 +150,8 @@ async function refreshApiStatus() {
   if (apiConfigured) {
     pill.textContent = 'API 연결됨';
     pill.className = 'pill pill-on';
-    $('cfg-state').textContent = '✅ 키 설정됨';
+    $('cfg-state').textContent =
+      res.source === 'env' ? '✅ 키 설정됨 (env.json)' : '✅ 키 설정됨 (직접 입력)';
     $('cfg-vendor-row').hidden = false;
     $('cfg-vendor').textContent = res.vendorId;
     $('cfg-key-row').hidden = false;
@@ -139,7 +162,7 @@ async function refreshApiStatus() {
   } else {
     pill.textContent = 'API 미설정';
     pill.className = 'pill pill-off';
-    $('cfg-state').textContent = '미설정 (env.json 없음)';
+    $('cfg-state').textContent = '미설정 — 아래에 키를 입력하세요';
     $('products-empty').hidden = false;
     $('products-main').hidden = true;
   }
@@ -157,6 +180,96 @@ $('test-btn').addEventListener('click', async () => {
   out.hidden = false;
   out.className = 'notice ' + (res.ok ? 'success' : 'error');
   out.textContent = res.ok ? res.message : res.error;
+});
+
+// ---------- 설정 탭: API 키 직접 입력 ----------
+$('save-keys-btn').addEventListener('click', async () => {
+  const btn = $('save-keys-btn');
+  setLoading(btn, true);
+  const res = await sendToBackground({
+    type: 'API_SAVE_KEYS',
+    accessKey: $('key-access').value,
+    secretKey: $('key-secret').value,
+    vendorId: $('key-vendor').value,
+  });
+  setLoading(btn, false);
+  if (!res.ok) {
+    toast(res.error);
+    return;
+  }
+  $('key-secret').value = ''; // 저장 후 시크릿은 화면에서 지운다
+  await refreshApiStatus();
+  toast(res.source === 'env'
+    ? '저장됨 (단, env.json이 있어 그 값이 우선 적용됩니다)'
+    : 'API 키를 저장했습니다');
+});
+
+$('clear-keys-btn').addEventListener('click', async () => {
+  const res = await sendToBackground({ type: 'API_CLEAR_KEYS' });
+  if (!res.ok) {
+    toast(res.error);
+    return;
+  }
+  await refreshApiStatus();
+  toast('저장된 키를 삭제했습니다');
+});
+
+// ---------- 설정 탭: 기록 백업 / 복원 ----------
+$('backup-btn').addEventListener('click', async () => {
+  const data = await storageGet([HISTORY_KEY, 'lastIds', 'scanDepth']);
+  const payload = {
+    app: '쿠팡 순위 파인더',
+    backupVersion: 1,
+    exportedAt: new Date().toISOString(),
+    rankHistory: data[HISTORY_KEY] || {},
+    lastIds: data.lastIds || '',
+    scanDepth: data.scanDepth || '3',
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `쿠팡순위파인더_백업_${ymd()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('백업 파일을 저장했습니다');
+});
+
+$('restore-btn').addEventListener('click', () => $('restore-file').click());
+
+$('restore-file').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    const incoming = payload.rankHistory;
+    if (!incoming || typeof incoming !== 'object') {
+      throw new Error('순위 기록(rankHistory)이 없는 파일입니다.');
+    }
+    // 기존 기록과 병합: 같은 시각(t) 항목은 중복 제거, 시간순 정렬
+    const history = await getHistory();
+    let mergedCombos = 0;
+    for (const [key, arr] of Object.entries(incoming)) {
+      if (!Array.isArray(arr)) continue;
+      const existing = history[key] || [];
+      const seen = new Set(existing.map((en) => en.t));
+      const combined = existing.concat(
+        arr.filter((en) => en && typeof en.t === 'number' && !seen.has(en.t))
+      );
+      combined.sort((a, b) => a.t - b.t);
+      if (combined.length > HISTORY_MAX_PER_COMBO) {
+        combined.splice(0, combined.length - HISTORY_MAX_PER_COMBO);
+      }
+      history[key] = combined;
+      mergedCombos += 1;
+    }
+    await storageSet({ [HISTORY_KEY]: history });
+    updateHistoryCount();
+    toast(`백업에서 ${mergedCombos}개 조합을 불러왔습니다`);
+  } catch (err) {
+    toast('가져오기 실패: ' + err.message);
+  }
 });
 
 // ============================================================
@@ -211,6 +324,7 @@ async function recordScan(keyword, pagesScanned, results) {
       organicRank: product ? product.organicRank : null,
       page: product ? product.page : null,
       isAd: product ? !!product.isAd : false,
+      delivery: product ? product.delivery || null : null,
       price: product ? product.price : null,
       reviewCount: product ? product.reviewCount : null,
       rating: product ? product.rating : null,
@@ -264,12 +378,54 @@ async function updateHistoryCount() {
 // 탭 1: 순위 조회
 // ============================================================
 const idsInput = $('product-ids');
-let scanDepth = 1;
+let scanDepth = 3; // 기본 3페이지 — 1페이지만 보면 첫 조회가 대부분 "못 찾음"이 된다
 let lastScan = null; // CSV 내보내기용 {keyword, pagesScanned, products, myIds}
 
 storageGet(['lastIds', 'scanDepth']).then((res) => {
   if (res.lastIds) idsInput.value = res.lastIds;
-  if (res.scanDepth) setDepth(parseInt(res.scanDepth, 10) || 1);
+  if (res.scanDepth) setDepth(parseInt(res.scanDepth, 10) || 3);
+});
+
+// ---------- 현재 탭 상태: 검색 페이지인지 먼저 보여준다 ----------
+let activeTabId = null;
+
+function checkCurrentTab() {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs && tabs[0];
+    const statusEl = $('tab-status');
+    activeTabId = tab ? tab.id : null;
+
+    if (tab && tab.url && tab.url.startsWith(COUPANG_SEARCH_URL)) {
+      let keyword = '';
+      try {
+        keyword = new URL(tab.url).searchParams.get('q') || '';
+      } catch (e) { /* 무시 */ }
+      statusEl.className = 'tab-status ok';
+      statusEl.textContent = `현재 탭: "${keyword}" 검색결과 ✓ 바로 조회할 수 있어요`;
+      $('open-search-row').hidden = true;
+      $('find-btn').disabled = false;
+    } else {
+      statusEl.className = 'tab-status warn';
+      statusEl.textContent =
+        '쿠팡 검색결과 페이지가 아니에요. 키워드를 입력하면 검색 탭을 열어드릴게요.';
+      $('open-search-row').hidden = false;
+      $('find-btn').disabled = true;
+    }
+  });
+}
+
+function openSearchTab() {
+  const kw = $('keyword-input').value.trim();
+  if (!kw) {
+    toast('키워드를 입력해주세요');
+    return;
+  }
+  chrome.tabs.create({ url: `${COUPANG_SEARCH_URL}?q=${encodeURIComponent(kw)}` });
+}
+
+$('open-search-btn').addEventListener('click', openSearchTab);
+$('keyword-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') openSearchTab();
 });
 
 document.querySelectorAll('#depth-seg .seg').forEach((btn) => {
@@ -349,12 +505,18 @@ function onFindRank() {
         return;
       }
 
-      handleScanResult(response.data, ids);
+      handleScanResult(response.data, ids, tab.id);
     });
   });
 }
 
-async function handleScanResult(data, myIds) {
+$('retry-deep-btn').addEventListener('click', () => {
+  setDepth(10);
+  storageSet({ scanDepth: '10' });
+  onFindRank();
+});
+
+async function handleScanResult(data, myIds, tabId) {
   const { keyword, pagesScanned, itemsFound, products } = data;
 
   if (itemsFound === 0) {
@@ -402,6 +564,25 @@ async function handleScanResult(data, myIds) {
   });
 
   lastScan = { keyword, pagesScanned, products, myIds: new Set(myIds) };
+
+  // 검색결과 페이지 위에 내 상품 하이라이트 (현재 열린 페이지에 있는 것만 표시됨)
+  const targets = results
+    .filter((r) => r.product)
+    .map((r) => ({
+      ids: [r.id],
+      label: r.product.isAd ? `광고 ${r.product.position}위` : `${r.product.position}위`,
+    }));
+  if (tabId != null && targets.length > 0) {
+    chrome.tabs.sendMessage(tabId, { type: 'HIGHLIGHT_MY_PRODUCTS', targets }, () => {
+      void chrome.runtime.lastError; // 실패해도 조회 결과에는 영향 없음
+    });
+  }
+
+  // 못 찾은 상품이 있으면 더 깊게 재조회 제안
+  const anyMissing = results.some((r) => !r.product);
+  $('retry-deep-btn').hidden = !(anyMissing && pagesScanned < 10);
+
+  toast('조회 완료 · 기록 탭에 저장됨');
 }
 
 function resultCard(id, p, delta) {
@@ -439,6 +620,13 @@ function resultCard(id, p, delta) {
   badge.textContent = p.isAd ? '광고' : `일반 ${p.organicRank}위`;
   body.appendChild(badge);
 
+  if (p.delivery) {
+    const rocket = document.createElement('span');
+    rocket.className = 'badge rocket';
+    rocket.textContent = p.delivery;
+    body.appendChild(rocket);
+  }
+
   const db = deltaBadge(delta);
   if (db) body.appendChild(db);
 
@@ -472,6 +660,7 @@ function clearRankOutput() {
   $('status').hidden = true;
   $('summary-row').hidden = true;
   $('results').textContent = '';
+  $('retry-deep-btn').hidden = true;
   $('analysis-wrap').hidden = true;
   $('analysis-body').textContent = '';
   $('all-products-wrap').hidden = true;
@@ -484,7 +673,7 @@ function clearRankOutput() {
 $('csv-results-btn').addEventListener('click', () => {
   if (!lastScan) return;
   const rows = [[
-    '순위', '일반순위', '광고', '페이지', 'productId', 'itemId', 'vendorItemId',
+    '순위', '일반순위', '광고', '배송', '페이지', 'productId', 'itemId', 'vendorItemId',
     '상품명', '가격', '평점', '리뷰수', '내상품',
   ]];
   lastScan.products.forEach((p) => {
@@ -492,7 +681,7 @@ $('csv-results-btn').addEventListener('click', () => {
       lastScan.myIds.has(p.productId) || lastScan.myIds.has(p.itemId) ||
       lastScan.myIds.has(p.vendorItemId);
     rows.push([
-      p.position, p.organicRank, p.isAd ? 'Y' : '', p.page,
+      p.position, p.organicRank, p.isAd ? 'Y' : '', p.delivery, p.page,
       p.productId, p.itemId, p.vendorItemId,
       p.name, p.price, p.rating, p.reviewCount, mine ? 'Y' : '',
     ]);
@@ -1164,3 +1353,4 @@ function extractMatchIds(obj) {
 // ============================================================
 refreshApiStatus();
 updateHistoryCount();
+checkCurrentTab();
