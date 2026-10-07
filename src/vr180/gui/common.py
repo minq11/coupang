@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +23,215 @@ from vr180.pipeline.job import Job, _deep_update, stages
 from vr180.util import imageio
 from vr180.util.log import Cancelled, RunContext
 
+
+def log_dir() -> Path:
+    d = paths.REPO_ROOT / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class _StreamTee(io.TextIOBase):
+    """stderr/stdout 복제기. 콘솔은 원본 그대로, 파일/리스트에는 완성 라인(개행 기준)만 기록.
+    tqdm \r 진행바는 마지막 세그먼트만 보존 (스팸 완화)."""
+
+    def __init__(self, console, *files, buffer: list[str] | None = None):
+        self._console = console
+        self._files = files
+        self._buffer = buffer
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        try:
+            self._console.write(s)
+            self._console.flush()
+        except Exception:
+            pass
+        self._buf += s
+        while True:
+            nl = self._buf.find("\n")
+            if nl < 0:
+                break
+            line, self._buf = self._buf[:nl], self._buf[nl + 1 :]
+            if "\r" in line:
+                line = line.rsplit("\r", 1)[-1]
+            if not line.strip():
+                continue
+            for f in self._files:
+                try:
+                    f.write(line + "\n")
+                    f.flush()
+                except Exception:
+                    pass
+            if self._buffer is not None:
+                self._buffer.append(line)
+        return len(s)
+
+    def flush(self) -> None:
+        try:
+            self._console.flush()
+        except Exception:
+            pass
+        for f in self._files:
+            try:
+                f.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        try:
+            return self._console.isatty()
+        except Exception:
+            return False
+
 STATUS_ICON = {"done": "✅", "stale": "⚠️", "missing": "⬜"}
+STATUS_STYLE = {
+    "done": "background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:6px;font-weight:600;border:1px solid #10b981",
+    "stale": "background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:6px;border:1px solid #f59e0b",
+    "missing": "background:#f3f4f6;color:#6b7280;padding:3px 8px;border-radius:6px;border:1px solid #d1d5db",
+}
 _running: dict[str, RunContext] = {}
+
+RUN_LOCK_LABEL = "⏳ 실행 중..."
+
+# meta.json 이 없을 때 쓰는 fallback 예상 시간(초). 한 번 돌리고 나면 각 Job 의 실제 elapsed_s 가 사용됨.
+DEFAULT_STAGE_ELAPSED = {
+    0: 3.0,
+    1: 5.0,
+    2: 6.0,
+    3: 180.0,
+    4: 30.0,
+    5: 60.0,
+    6: 90.0,
+    7: 3.0,
+}
+
+_RE_STAGE_RUN = re.compile(r"Stage (\d+) \S+: 실행\s*$")
+_RE_STAGE_DONE = re.compile(r"Stage (\d+) \S+: 완료 \(([\d.]+)s\)\s*$")
+_RE_STAGE_CACHE = re.compile(r"Stage (\d+) \S+: 캐시 사용\s*$")
+
+
+def _fmt_s(sec: float) -> str:
+    sec = max(0, int(sec))
+    m, s = divmod(sec, 60)
+    if m >= 60:
+        h, m = divmod(m, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _stage_eta(job: Job, i: int) -> float:
+    m = job.meta(i)
+    if m and isinstance(m.get("elapsed_s"), (int, float)):
+        return float(m["elapsed_s"])
+    return DEFAULT_STAGE_ELAPSED.get(i, 30.0)
+
+
+def _planned_stages(job: Job, from_stage: int, to_stage: int) -> list[int]:
+    """from..to 범위의 stage + 산출물이 없어서 자동 실행될 이전 stage."""
+    pre = [i for i in range(0, from_stage) if not job.outputs_exist(i)]
+    return pre + list(range(from_stage, to_stage + 1))
+
+# info= 로 넣은 설명을 평소에는 숨기고 라벨/위젯 호버 시에만 보이게. 액션바 통일 간격.
+CSS = """
+.vr180-tip .info,
+.vr180-tip .label-wrap + .info,
+.vr180-tip .svelte-1gfkn6j,
+.vr180-tip span.info,
+.vr180-tip > div > .info {
+    display: none !important;
+}
+.vr180-tip:hover .info,
+.vr180-tip:hover .label-wrap + .info,
+.vr180-tip:hover .svelte-1gfkn6j,
+.vr180-tip:hover span.info,
+.vr180-tip:hover > div > .info {
+    display: block !important;
+    color: #4b5563;
+    font-size: 11px;
+    line-height: 1.3;
+    margin-top: 2px;
+    animation: vr180-fade 0.12s ease-out;
+}
+@keyframes vr180-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.vr180-actions {
+    gap: 8px !important;
+    margin: 8px 0 4px !important;
+    padding: 8px;
+    background: #f3f4f6;
+    border-radius: 8px;
+}
+.dark .vr180-actions { background: #1f2937; }
+.vr180-actions .wrap { align-items: stretch; }
+
+.vr180-run button[disabled],
+.vr180-run button[aria-disabled="true"] {
+    cursor: progress !important;
+    opacity: 0.85;
+}
+
+/* "기존 Job 열기" 팝업 — 반고정 패널. Gradio 레이아웃 안이지만 shadow/border 로 떠보이게. */
+.vr180-popup {
+    position: fixed !important;
+    top: 50% !important; left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    z-index: 1000;
+    max-width: 920px; width: 85vw;
+    max-height: 80vh; overflow: auto;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+    padding: 20px !important;
+}
+.dark .vr180-popup { background: #111827; border-color: #374151; }
+.vr180-popup::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: -1;
+}
+
+/* 썸네일 영역 */
+.vr180-thumb { max-height: 180px; }
+"""
+
+
+def with_button_lock(gen_fn, idle_label: str):
+    """(log_brief, log_full, status, progress_md, button_short, tab_update) 6-tuple 을
+    yield 하는 generator 를 감싸서 실행 중 버튼 잠금 + 라벨 교체. 끝나면 idle_label 복귀.
+    바깥 click 의 outputs 는 [button, log_brief, log_full, status, progress, stage_tabs] 6개여야 한다."""
+
+    def wrapped(*args):
+        try:
+            yield (
+                gr.update(value=RUN_LOCK_LABEL, interactive=False),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+            for log_brief, log_full, status, progress_md, button_short, tab_update in gen_fn(*args):
+                yield (
+                    gr.update(value=button_short, interactive=False),
+                    log_brief,
+                    log_full,
+                    status,
+                    progress_md,
+                    tab_update,
+                )
+        finally:
+            yield (
+                gr.update(value=idle_label, interactive=True),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+
+    return wrapped
 
 
 # ----------------------------------------------------------------------------- Job
@@ -41,15 +251,17 @@ def get_job(job_id: str | None) -> Job | None:
 def status_md(job_id: str | None) -> str:
     job = get_job(job_id)
     if job is None:
-        return "Job 없음 — 위에서 입력 이미지를 올리고 **새 Job** 을 누르세요."
+        return "_Job 없음 — 입력 이미지를 올리고 **새 Job** 을 누르거나 **기존 Job 열기** 로 선택._"
     cells = []
     for i, st in enumerate(stages()):
         s = job.status(i)
-        cells.append(f"{STATUS_ICON[s]} {i} {st.NAME}")
+        cells.append(
+            f'<span style="{STATUS_STYLE[s]};margin-right:4px">{STATUS_ICON[s]} {i} {st.NAME}</span>'
+        )
     return (
-        f"**Job `{job.id}`** &nbsp; "
-        + " · ".join(cells)
-        + "  \n(✅ 최신 · ⚠️ stale: 입력/파라미터가 바뀜 · ⬜ 없음)"
+        f"**Job** `{job.id}` &nbsp;&nbsp; "
+        + "".join(cells)
+        + '  \n<span style="color:#6b7280;font-size:11px">✅ 완료 · ⚠️ stale (파라미터 바뀜) · ⬜ 없음</span>'
     )
 
 
@@ -58,6 +270,26 @@ def create_job(file_path: str | None, job_id: str | None) -> tuple[str, Any, str
         raise gr.Error("입력 SBS 이미지를 먼저 올리세요")
     job = Job.create(file_path, job_id=(job_id or None))
     return job.id, gr.update(choices=job_choices(), value=job.id), status_md(job.id)
+
+
+def job_input_path(job_id: str | None) -> Path | None:
+    """Job 의 입력 SBS 이미지 경로. 썸네일/미리보기용."""
+    job = get_job(job_id)
+    if job is None:
+        return None
+    try:
+        return job.input_path
+    except FileNotFoundError:
+        return None
+
+
+def input_preview(job_id: str | None, max_side: int = 640):
+    """Job 의 입력 SBS 이미지를 다운스케일해서 numpy 로 반환."""
+    p = job_input_path(job_id)
+    if p is None:
+        return None
+    img = imageio.read_rgba(p)[..., :3]
+    return imageio.downscale_for_preview(img, max_side)
 
 
 # ----------------------------------------------------------------------------- 파라미터
@@ -80,7 +312,7 @@ def set_model_param(job: Job, key: str, value: Any) -> None:
     job.save_params()
 
 
-# ----------------------------------------------------------------------------- 실행 (제너레이터: 로그를 흘려보낸다)
+# ----------------------------------------------------------------------------- 실행 (제너레이터: 로그/진행률을 흘려보낸다)
 def run_pipeline(
     job_id: str | None,
     from_stage: int,
@@ -89,7 +321,9 @@ def run_pipeline(
     model_updates: dict | None = None,
     force_from: bool = True,
 ):
-    """yield (log_text, status_md). GUI 버튼 핸들러에서 `yield from` 으로 쓴다."""
+    """yield (log_text, status_md, progress_md, button_short).
+    과거 meta.json 의 elapsed_s 를 기반으로 Stage ETA 를 추정.
+    GUI 버튼 핸들러에서 `yield from` 으로 쓴다."""
     job = get_job(job_id)
     if job is None:
         raise gr.Error("Job 을 먼저 만들거나 여세요")
@@ -102,32 +336,160 @@ def run_pipeline(
     if job.id in _running:
         raise gr.Error("이 Job 은 이미 실행 중입니다 (취소 후 다시)")
 
-    ctx = RunContext(log_fn=lambda s: None)
+    _to = (len(stages()) - 1) if to_stage is None else to_stage
+    plan = _planned_stages(job, from_stage, _to)
+    preds: dict[int, float] = {i: _stage_eta(job, i) for i in plan}
+    actuals: dict[int, float] = {}
+    cached: set[int] = set()
+    state = {"current": None, "started_at": 0.0}  # mutable so closures can see
+    scan_pos = [0]
+    last_completed = [-1]  # Stage 완료 알림 중복 방지. 7(마지막) 완료 시엔 전환 안 함.
+    N_STAGES = len(stages())
+
+    def _tab_update_if_newly_done():
+        done = sorted(set(actuals.keys()) | cached)
+        if not done:
+            return gr.update()
+        latest = done[-1]
+        if latest > last_completed[0] and latest + 1 < N_STAGES:
+            last_completed[0] = latest
+            return gr.update(selected=latest + 1)
+        last_completed[0] = max(last_completed[0], latest)
+        return gr.update()
+
+    # 로그 파일 두 곳에 기록. latest.log 는 매 실행마다 덮어쓰기, run.log 는 Job 영구 보관.
+    latest_fh = (log_dir() / "latest.log").open("w", encoding="utf-8", buffering=1)
+    job_fh = (job.dir / "run.log").open("a", encoding="utf-8", buffering=1)
+    header = (
+        f"\n{'=' * 72}\n"
+        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] job={job.id}  "
+        f"from={from_stage} to={_to}  plan={plan}\n{'=' * 72}\n"
+    )
+    for fh in (latest_fh, job_fh):
+        fh.write(header)
+
+    # 상세 로그: ctx.log + stderr/stdout 전부 (= latest.log 내용과 동일한 라인). GUI 상세 탭에서 보여줌.
+    full_lines: list[str] = header.strip("\n").split("\n")
+
+    def _file_log(line: str) -> None:
+        for fh in (latest_fh, job_fh):
+            try:
+                fh.write(line + "\n")
+            except Exception:
+                pass
+        full_lines.append(line)
+
+    ctx = RunContext(log_fn=_file_log)
     _running[job.id] = ctx
     err: list[BaseException] = []
 
+    def _scan(limit: int) -> None:
+        while scan_pos[0] < limit:
+            line = ctx.lines[scan_pos[0]]
+            scan_pos[0] += 1
+            if (m := _RE_STAGE_RUN.search(line)) is not None:
+                state["current"] = int(m.group(1))
+                state["started_at"] = time.time()
+                continue
+            if (m := _RE_STAGE_DONE.search(line)) is not None:
+                idx = int(m.group(1))
+                actuals[idx] = float(m.group(2))
+                if state["current"] == idx:
+                    state["current"] = None
+                continue
+            if (m := _RE_STAGE_CACHE.search(line)) is not None:
+                cached.add(int(m.group(1)))
+
+    def _progress():
+        now = time.time()
+        done_elapsed = sum(actuals.values())
+        cur = state["current"]
+        if cur is not None:
+            cur_elapsed = now - state["started_at"]
+            cur_pred = max(preds.get(cur, 0.0), cur_elapsed * 1.1)
+        else:
+            cur_elapsed = 0.0
+            cur_pred = 0.0
+        rem = [i for i in plan if i != cur and i not in actuals and i not in cached]
+        rem_pred = sum(preds.get(i, 0.0) for i in rem)
+        total_est = done_elapsed + cur_pred + rem_pred
+        elapsed = done_elapsed + cur_elapsed
+        remaining = max(0.0, total_est - elapsed)
+        done_cnt = len(actuals) + len(cached)
+        if cur is not None:
+            try:
+                name = stages()[cur].NAME
+            except (IndexError, AttributeError):
+                name = ""
+            pos = done_cnt + 1
+            label = f"Stage {cur} `{name}` · {pos}/{len(plan)} 진행 중"
+        elif done_cnt >= len(plan):
+            label = f"완료 ({done_cnt}/{len(plan)})"
+        elif done_cnt > 0:
+            label = f"다음 Stage 준비 ({done_cnt}/{len(plan)})"
+        else:
+            label = "준비 중"
+        md = (
+            f"**{label}** · 경과 `{_fmt_s(elapsed)}` / 예상 `{_fmt_s(total_est)}`"
+            f" · 남은 `~{_fmt_s(remaining)}`"
+        )
+        short = f"⏳ {_fmt_s(elapsed)} / ~{_fmt_s(total_est)}"
+        return md, short
+
     def worker():
+        orig_out, orig_err = sys.stdout, sys.stderr
+        sys.stdout = _StreamTee(orig_out, latest_fh, job_fh, buffer=full_lines)
+        sys.stderr = _StreamTee(orig_err, latest_fh, job_fh, buffer=full_lines)
         try:
             job.run(from_stage=from_stage, to_stage=to_stage, ctx=ctx, force_from=force_from)
         except Cancelled:
             ctx.log("취소됨")
         except BaseException as e:  # noqa: BLE001
             err.append(e)
+            tb = traceback.format_exc()
             ctx.log(f"오류: {type(e).__name__}: {e}")
+            for fh in (latest_fh, job_fh):
+                try:
+                    fh.write(tb + "\n")
+                except Exception:
+                    pass
+            full_lines.extend(tb.splitlines())
+        finally:
+            sys.stdout, sys.stderr = orig_out, orig_err
 
     th = threading.Thread(target=worker, daemon=True)
     th.start()
-    last = 0
     try:
         while th.is_alive():
-            if len(ctx.lines) != last:
-                last = len(ctx.lines)
-                yield "\n".join(ctx.lines[-200:]), status_md(job.id)
-            time.sleep(0.3)
+            _scan(len(ctx.lines))
+            md, short = _progress()
+            yield (
+                "\n".join(ctx.lines[-200:]),
+                "\n".join(full_lines[-800:]),
+                status_md(job.id),
+                md,
+                short,
+                _tab_update_if_newly_done(),
+            )
+            time.sleep(0.5)
         th.join()
+        _scan(len(ctx.lines))
     finally:
         _running.pop(job.id, None)
-    yield "\n".join(ctx.lines[-200:]), status_md(job.id)
+        for fh in (latest_fh, job_fh):
+            try:
+                fh.close()
+            except Exception:
+                pass
+    md, short = _progress()
+    yield (
+        "\n".join(ctx.lines[-200:]),
+        "\n".join(full_lines[-800:]),
+        status_md(job.id),
+        md,
+        short,
+        _tab_update_if_newly_done(),
+    )
     if err:
         raise gr.Error(f"{type(err[0]).__name__}: {err[0]}")
 

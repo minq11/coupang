@@ -7,15 +7,17 @@ import gradio as gr
 from vr180.gui import common as C
 
 STAGE = 1
+RUN_LABEL = "▶ 실행 (Stage 1)"
+PREV_LABEL = "▶ 실행 + Stage 2 미리보기"
 
 
 def load(job_id):
     job = C.get_job(job_id)
     if job is None:
-        return [80.0, False, "_Job 없음_", None]
+        return [80.0, True, "_Job 없음_", None]
     return [
         float(C.get_param(job_id, STAGE, "hfov_deg", 80.0)),
-        bool(C.get_param(job_id, STAGE, "auto_estimate", False)),
+        bool(C.get_param(job_id, STAGE, "auto_estimate", True)),
         C.json_md(
             job.path(1, "camera.json"),
             ["hfov_deg", "vfov_deg", "focal_px", "source", "confidence", "auto_hfov_deg", "estimator"],
@@ -25,30 +27,58 @@ def load(job_id):
 
 
 def build(shared):
-    with gr.Tab("1 FOV"):
+    with gr.Tab("1 FOV", id=STAGE):
         with gr.Row():
-            hfov = gr.Slider(40, 120, value=80, step=0.5, label="hfov_deg (수평 화각)")
-            auto = gr.Checkbox(label="GeoCalib 자동 추정 (설치 필요)", value=False)
-        with gr.Row():
-            run_btn = gr.Button("실행 (Stage 1)", variant="primary")
-            prev_btn = gr.Button("실행 + 다음 단계 자동 미리보기 (Stage 1~2)")
+            hfov = gr.Slider(
+                40,
+                120,
+                value=80,
+                step=0.5,
+                label="hfov_deg (수평 화각)",
+                info="원본 3D 영상의 가로 시야각(°). 결과 전체 왜곡을 좌우. 보통 70~90°, 광각 액션캠은 100°+.",
+                elem_classes=["vr180-tip"],
+            )
+            auto = gr.Checkbox(
+                label="GeoCalib 자동 추정",
+                value=True,
+                info="GeoCalib 모델로 FOV 를 추정해서 수동값보다 우선 사용. 신뢰도가 낮으면 수동값으로 복귀.",
+                elem_classes=["vr180-tip"],
+            )
         info = gr.Markdown()
+        with gr.Row(elem_classes=["vr180-actions"]):
+            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"], scale=1)
+            prev_btn = gr.Button(PREV_LABEL, elem_classes=["vr180-run"], scale=1)
         prev = gr.Image(label="Stage 2 미리보기 (L|R, 원본 밖 검정)", type="numpy", interactive=False)
         outputs = [hfov, auto, info, prev]
 
-        def run(job_id, h, a, to):
-            yield from C.run_pipeline(
-                job_id, STAGE, to, {STAGE: {"hfov_deg": float(h), "auto_estimate": bool(a)}}
-            )
+        def run_1(job_id, h, a):
+            yield from C.run_pipeline(job_id, STAGE, 1, {STAGE: {"hfov_deg": float(h), "auto_estimate": bool(a)}})
+
+        def run_12(job_id, h, a):
+            yield from C.run_pipeline(job_id, STAGE, 2, {STAGE: {"hfov_deg": float(h), "auto_estimate": bool(a)}})
 
         run_btn.click(
-            lambda j, h, a: (yield from run(j, h, a, 1)),
+            C.with_button_lock(run_1, RUN_LABEL),
             [shared["job_id"], hfov, auto],
-            [shared["log"], shared["status"]],
+            [
+                run_btn,
+                shared["log"],
+                shared["log_full"],
+                shared["status"],
+                shared["progress"],
+                shared["stage_tabs"],
+            ],
         ).then(load, [shared["job_id"]], outputs)
         prev_btn.click(
-            lambda j, h, a: (yield from run(j, h, a, 2)),
+            C.with_button_lock(run_12, PREV_LABEL),
             [shared["job_id"], hfov, auto],
-            [shared["log"], shared["status"]],
+            [
+                prev_btn,
+                shared["log"],
+                shared["log_full"],
+                shared["status"],
+                shared["progress"],
+                shared["stage_tabs"],
+            ],
         ).then(load, [shared["job_id"]], outputs)
     return load, outputs

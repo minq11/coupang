@@ -16,7 +16,8 @@ import numpy as np
 from vr180.models.base import ModelInfo, StereoMatcher, resolve_device
 
 RAFT_STEREO_WEIGHTS = {
-    "middlebury": "https://www.dropbox.com/s/ftveifyqcomiwaq/models.zip?dl=1",  # 공식 README 의 models.zip (raftstereo-middlebury.pth 포함)
+    # 공식 README 의 models.zip (raftstereo-middlebury.pth 포함). Dropbox 가 /scl/fi/ 포맷으로 바꿔서 구 /s/ 링크는 HTML 에러 페이지만 반환함.
+    "middlebury": "https://www.dropbox.com/scl/fi/5khx1bhz84dapi8vtwapg/models.zip?rlkey=ggddrn1du1iiq6mgc2dsdpmwi&dl=1",
 }
 
 
@@ -64,9 +65,10 @@ class RaftStereoMatcher(StereoMatcher):
             raise FileNotFoundError(
                 f"RAFT-Stereo 가중치가 없음: {wp}. `python -m vr180 fetch-models --raft-stereo` 실행"
             )
-        if str(core) not in sys.path:
-            sys.path.insert(0, str(core))
-        from raft_stereo import RAFTStereo  # type: ignore
+        # RAFT-Stereo 저장소 내부가 `from core.xxx import ...` 를 쓰므로 repo 루트가 path 에 있어야 한다.
+        if str(repo) not in sys.path:
+            sys.path.insert(0, str(repo))
+        from core.raft_stereo import RAFTStereo  # type: ignore
 
         # middlebury 가중치는 공식 README 의 설정과 같아야 한다
         args = argparse.Namespace(

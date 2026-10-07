@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from vr180.models.base import Inpainter, ModelInfo, resolve_device
+from vr180.util.log import Cancelled
 
 
 class SDXLInpainter(Inpainter):
@@ -52,6 +53,13 @@ class SDXLInpainter(Inpainter):
         img = Image.fromarray(rgb)
         m = Image.fromarray((np.asarray(mask) > 127).astype(np.uint8) * 255)
         gen = torch.Generator(device="cpu").manual_seed(int(seed))
+        _ctx = getattr(self, "ctx", None)
+
+        def _cancel_cb(pipe, step, timestep, callback_kwargs):
+            if _ctx is not None and _ctx.cancelled():
+                raise Cancelled("사용자가 취소함")
+            return callback_kwargs
+
         out = self.pipe(
             prompt=prompt or " ",
             negative_prompt=negative_prompt or None,
@@ -63,6 +71,7 @@ class SDXLInpainter(Inpainter):
             guidance_scale=float(guidance),
             strength=float(strength),
             generator=gen,
+            callback_on_step_end=_cancel_cb,
         ).images[0]
         out = np.asarray(out.convert("RGB"))
         # 마스크 밖은 원본 유지 (VAE 왕복으로 인한 미세 변화 제거)

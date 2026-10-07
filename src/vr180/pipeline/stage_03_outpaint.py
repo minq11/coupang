@@ -69,6 +69,7 @@ def run(job, params: dict, ctx) -> dict:
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
     inpainter = get_inpainter(params.get("inpainter", "opencv"), job.model_params())
+    inpainter.ctx = ctx  # inpaint 중 denoising step 마다 cancel 체크
     info = inpainter.info()
     ctx.log(f"inpainter={info.name} 타일 {len(tiles)}장 res={tile_res}")
     n = len(tiles)
@@ -93,7 +94,12 @@ def run(job, params: dict, ctx) -> dict:
                 result = imageio.read_rgb(out_path)
             else:
                 hint = TILE_HINTS.get((0, int(np.sign(t.pitch_deg))), "") if t.yaw_deg == 0 else ""
-                prompt = str(params.get("prompt", "")) + hint
+                # 타일별 override 가 있으면 그걸로 교체 (hint 는 유지)
+                tile_overrides = params.get("tile_prompt_overrides") or {}
+                base_prompt = tile_overrides.get(t.name) or str(params.get("prompt", ""))
+                prompt = base_prompt + hint
+                if t.name in tile_overrides:
+                    ctx.log(f"  {t.name}: override 프롬프트 사용")
                 result = inpainter.inpaint(
                     rgb,
                     mask,

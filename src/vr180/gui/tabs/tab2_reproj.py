@@ -9,6 +9,7 @@ import gradio as gr
 from vr180.gui import common as C
 
 STAGE = 2
+RUN_LABEL = "▶ 실행 (Stage 2)"
 
 
 def load(job_id):
@@ -31,12 +32,26 @@ def load(job_id):
 
 
 def build(shared):
-    with gr.Tab("2 재투영"):
+    with gr.Tab("2 재투영", id=STAGE):
         with gr.Row():
-            size = gr.Dropdown([2048, 3072, 4096, 5120, 6144], value=4096, label="눈당 해상도 S")
-            interp = gr.Dropdown(["lanczos", "cubic", "linear", "nearest"], value="lanczos", label="보간")
-            run_btn = gr.Button("실행 (Stage 2 부터)", variant="primary")
-            export_btn = gr.Button("Quest 용 미리보기 내보내기 (07_output/preview_stage2_SBS.png)")
+            size = gr.Dropdown(
+                [2048, 3072, 4096, 5120, 6144],
+                value=4096,
+                label="눈당 해상도 S",
+                info="S×S half-equirect 캔버스. Quest 2/3 는 4096~5120 권장. 6144 는 PC 뷰어용.",
+                elem_classes=["vr180-tip"],
+            )
+        with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
+            interp = gr.Dropdown(
+                ["lanczos", "cubic", "linear", "nearest"],
+                value="lanczos",
+                label="보간",
+                info="재투영 샘플링 커널. lanczos = 품질 최고, nearest = 가장 빠름.",
+                elem_classes=["vr180-tip"],
+            )
+        with gr.Row(elem_classes=["vr180-actions"]):
+            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"], scale=2)
+            export_btn = gr.Button("📤 Quest 미리보기 내보내기", scale=1)
         slider = gr.ImageSlider(label="L_equi ↔ R_equi (드래그로 비교)", type="numpy", interactive=False)
         with gr.Row():
             mask = gr.Image(label="valid_mask", type="numpy", interactive=False)
@@ -55,8 +70,17 @@ def build(shared):
             shutil.copy2(job.path(2, "preview_sbs.png"), dst)
             return f"내보냄: {dst}"
 
-        run_btn.click(run, [shared["job_id"], size, interp], [shared["log"], shared["status"]]).then(
-            load, [shared["job_id"]], outputs
-        )
+        run_btn.click(
+            C.with_button_lock(run, RUN_LABEL),
+            [shared["job_id"], size, interp],
+            [
+                run_btn,
+                shared["log"],
+                shared["log_full"],
+                shared["status"],
+                shared["progress"],
+                shared["stage_tabs"],
+            ],
+        ).then(load, [shared["job_id"]], outputs)
         export_btn.click(export, [shared["job_id"]], [shared["log"]])
     return load, outputs

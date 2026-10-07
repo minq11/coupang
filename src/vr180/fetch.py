@@ -58,10 +58,12 @@ def fetch_models(sdxl=False, da2=False, flux=False, raft_stereo=False, raft_flow
             url = RAFT_STEREO_WEIGHTS["middlebury"]
             print(f"[dl] {url}")
             try:
-                data = urllib.request.urlopen(url, timeout=120).read()
+                # Dropbox 는 User-Agent 가 없으면 HTML 랜딩 페이지만 돌려줌.
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                data = urllib.request.urlopen(req, timeout=300).read()
                 with zipfile.ZipFile(io.BytesIO(data)) as z:
                     for n in z.namelist():
-                        if n.endswith(".pth"):
+                        if n.endswith(".pth") and not n.startswith("__MACOSX/"):
                             (wdir / n.split("/")[-1]).write_bytes(z.read(n))
                             print("   ", n)
             except Exception as e:

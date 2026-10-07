@@ -11,6 +11,9 @@ build/
 # 로컬 설정
 .env
 
+# GUI 실행 로그 (common.py 가 매 실행마다 덮어쓰기, work/<job_id>/run.log 는 Job 폴더 안)
+logs/
+
 # 모델 가중치 / Job 산출물 (용량 큼)
 models/*
 !models/.gitkeep

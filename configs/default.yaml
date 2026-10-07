@@ -4,13 +4,13 @@
 stage_00_split:
   swap_lr: false          # 입력이 우=Left 로 배열돼 있으면 true
   rectify: false          # 수직 시차 보정 (y 방향 평행이동만)
-  matcher: sift           # sift | lightglue
+  matcher: lightglue      # sift | lightglue  (lightglue 설치됨)
   max_features: 4000
   dy_warn_px: 1.0         # 중앙값 |dy| 가 이 값보다 크면 경고
 
 stage_01_fov:
   hfov_deg: 80.0          # 수동 입력. 결과 전체를 좌우하는 가장 중요한 값
-  auto_estimate: false    # GeoCalib 자동 추정 (설치돼 있고 GPU 있을 때)
+  auto_estimate: true     # GeoCalib 자동 추정 (설치됨)
   auto_min_confidence: 0.5
   estimator: geocalib     # geocalib | manual
 
@@ -20,12 +20,12 @@ stage_02_reproj:
   preview_only_background: black   # Quest 미리보기에서 원본 밖 채울 색
 
 stage_03_outpaint:
-  inpainter: opencv       # opencv | sdxl | flux   (opencv 는 모델 없이 뼈대 확인용)
+  inpainter: opencv       # opencv | sdxl | flux   (opencv 는 Telea — 빠르고 묘사 없음, 주변시 방해↓)
   prompt: "indoor scene, natural lighting, photorealistic, consistent perspective"
   negative_prompt: "text, watermark, people, blurry, distorted"
   seed: 42
   steps: 30
-  guidance: 7.0
+  guidance: 30.0        # FLUX 는 30 근처, SDXL 는 7 근처 권장
   tile_res: 1024          # 타일 해상도 (고정 권장)
   tile_fov_deg: 90.0
   tile_yaws_deg: [-60, 0, 60]
@@ -37,9 +37,12 @@ stage_03_outpaint:
   only_tiles: []
   # true 면 기존 tiles/ 결과를 재사용하고 only_tiles 만 다시 만든다
   reuse_existing_tiles: false
+  # 타일별 프롬프트 override. {타일이름: 프롬프트}. 비어 있으면 공통 prompt 사용.
+  # 예: {"y+0_p-45": "wooden plank floor, natural lighting"}
+  tile_prompt_overrides: {}
 
 stage_04_stereo:
-  matcher: sgbm           # sgbm | raft_stereo | raft_flow   (sgbm 은 OpenCV, 모델 없음)
+  matcher: raft_stereo    # sgbm | raft_stereo | raft_flow   (RAFT-Stereo 설치됨)
   max_disparity: 256      # 픽셀. 원본 해상도 기준
   angular_exact: true     # Δθ = d_px / f / (1 + x²)  (false 면 d_px / f)
   raft_iters: 32

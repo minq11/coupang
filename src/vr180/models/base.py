@@ -34,6 +34,7 @@ class BaseModel(ABC):
     def __init__(self, model_cfg: dict):
         self.cfg = model_cfg
         self._loaded = False
+        self.ctx = None  # 선택: RunContext (cancel 체크용). 호출 측에서 setattr 로 주입.
 
     def load(self) -> None:
         if not self._loaded:
@@ -66,6 +67,9 @@ class BaseModel(ABC):
 
 class Inpainter(BaseModel):
     """RGB uint8 (H×W×3) + 마스크 uint8 (255 = 채울 곳) → RGB uint8."""
+
+    # 선택: RunContext. 설정되면 inpaint 중 denoising step 마다 cancel 체크 (diffusers callback_on_step_end 로).
+    ctx = None
 
     @abstractmethod
     def inpaint(

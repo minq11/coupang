@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from PIL import Image
 
 from vr180.models.base import Inpainter, ModelInfo, resolve_device
+from vr180.util.log import Cancelled
 
 
 class FluxFillInpainter(Inpainter):
@@ -85,23 +87,47 @@ class FluxFillInpainter(Inpainter):
 
         self.load()
         h, w = rgb.shape[:2]
-        img = Image.fromarray(rgb)
-        m = Image.fromarray((np.asarray(mask) > 127).astype(np.uint8) * 255)
+        # FLUX 는 h,w 가 16의 배수여야 함. 그렇지 않으면 diffusers 가 조용히 리사이즈해버려서
+        # 원본 shape 기반 마스킹이 깨진다 → 바깥에서 16 배수로 패딩하고 추론 후 원본 크기로 crop.
+        ph = (-h) % 16
+        pw = (-w) % 16
+        if ph or pw:
+            rgb_p = np.pad(rgb, ((0, ph), (0, pw), (0, 0)), mode="edge")
+            mask_p = np.pad(np.asarray(mask), ((0, ph), (0, pw)), mode="edge")
+        else:
+            rgb_p = rgb
+            mask_p = np.asarray(mask)
+        H, W = rgb_p.shape[:2]
+        img = Image.fromarray(rgb_p)
+        m = Image.fromarray((mask_p > 127).astype(np.uint8) * 255)
         gen = torch.Generator(device="cpu").manual_seed(int(seed))
         # FLUX Fill 은 네거티브 프롬프트가 없고 guidance 가 SDXL 보다 훨씬 크다 (권장 30).
         g = float(guidance) if guidance >= 10 else 30.0
+        _ctx = getattr(self, "ctx", None)
+
+        def _cancel_cb(pipe, step, timestep, callback_kwargs):
+            if _ctx is not None and _ctx.cancelled():
+                raise Cancelled("사용자가 취소함")
+            return callback_kwargs
+
         out = self.pipe(
             prompt=prompt or " ",
             image=img,
             mask_image=m,
-            height=h,
-            width=w,
+            height=H,
+            width=W,
             num_inference_steps=int(steps),
             guidance_scale=g,
             max_sequence_length=512,
             generator=gen,
+            callback_on_step_end=_cancel_cb,
         ).images[0]
         out = np.asarray(out.convert("RGB")).copy()
+        # diffusers 가 내부에서 다른 사이즈로 떨어뜨릴 수 있음 (관찰: 288 요청에 272 반환).
+        # 패딩된 (H, W) 로 리사이즈 후 원본 (h, w) 로 crop → mask 와 shape 보장.
+        if out.shape[:2] != (H, W):
+            out = cv2.resize(out, (W, H), interpolation=cv2.INTER_CUBIC)
+        out = out[:h, :w]
         keep = np.asarray(mask) <= 127
         out[keep] = rgb[keep]
         return out

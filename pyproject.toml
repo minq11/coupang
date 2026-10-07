@@ -26,6 +26,9 @@ dependencies = [
     "gguf>=0.10",
     "sentencepiece>=0.2",
     "protobuf>=4.25",
+    # RAFT-Stereo (third_party clone) 가 필요로 하는 transitive deps
+    "scipy>=1.11",
+    "opt-einsum>=3.3",
 ]
 
 [project.optional-dependencies]

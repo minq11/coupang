@@ -8,6 +8,7 @@ from vr180.gui import common as C
 from vr180.util import imageio
 
 STAGE = 0
+RUN_LABEL = "▶ 실행 (Stage 0)"
 
 
 def load(job_id):
@@ -40,11 +41,23 @@ def load(job_id):
 
 
 def build(shared):
-    with gr.Tab("0 입력"):
-        with gr.Row():
-            swap = gr.Checkbox(label="swap_lr (입력이 우=Left)", value=False)
-            rect = gr.Checkbox(label="rectify (수직 시차 보정)", value=False)
-            run_btn = gr.Button("실행 (Stage 0 부터)", variant="primary")
+    with gr.Tab("0 입력", id=STAGE):
+        with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
+            with gr.Row():
+                swap = gr.Checkbox(
+                    label="swap_lr",
+                    value=False,
+                    info="입력이 '우=Left, 좌=Right' 로 배열된 경우 켠다. 보통 꺼둠.",
+                    elem_classes=["vr180-tip"],
+                )
+                rect = gr.Checkbox(
+                    label="rectify",
+                    value=False,
+                    info="L/R 특징점 매칭으로 수직 시차를 보정 (y 방향 평행이동). 세로 어긋남이 있을 때만 켠다.",
+                    elem_classes=["vr180-tip"],
+                )
+        with gr.Row(elem_classes=["vr180-actions"]):
+            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
         warn = gr.Markdown()
         with gr.Row():
             l_img = gr.Image(label="L 원본", type="numpy", interactive=False)
@@ -58,7 +71,16 @@ def build(shared):
                 job_id, STAGE, STAGE, {STAGE: {"swap_lr": bool(swap_v), "rectify": bool(rect_v)}}
             )
 
-        run_btn.click(run, [shared["job_id"], swap, rect], [shared["log"], shared["status"]]).then(
-            load, [shared["job_id"]], outputs
-        )
+        run_btn.click(
+            C.with_button_lock(run, RUN_LABEL),
+            [shared["job_id"], swap, rect],
+            [
+                run_btn,
+                shared["log"],
+                shared["log_full"],
+                shared["status"],
+                shared["progress"],
+                shared["stage_tabs"],
+            ],
+        ).then(load, [shared["job_id"]], outputs)
     return load, outputs

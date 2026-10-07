@@ -1,9 +1,14 @@
-"""Stage 7 — pano_L | pano_R 를 붙여 VR180 SBS 출력 (PNG + JPG q95, 선택 XMP GPano)."""
+"""Stage 7 — pano_L | pano_R 를 붙여 VR180 SBS 출력 (PNG + JPG q95, 선택 XMP GPano).
+
+JPG 는 Job 폴더뿐 아니라 공용 `work/output/<job_id><suffix>.jpg` 로도 복사된다 (쉽게 모아 보기용)."""
 
 from __future__ import annotations
 
+import shutil
+
 import numpy as np
 
+from vr180 import paths
 from vr180.util import imageio
 from vr180.util.xmp import inject_xmp_jpeg
 
@@ -49,6 +54,13 @@ def run(job, params: dict, ctx) -> dict:
         if params.get("write_xmp", True):
             inject_xmp_jpeg(jpg, pano_size=size)
         written.append(str(jpg))
+        # 공용 출력 폴더 (work/output/) 에 JPG 만 복사 — Job 별로 흩어진 결과를 한 곳에서 모아보려는 용도.
+        pool = paths.work_dir() / "output"
+        pool.mkdir(parents=True, exist_ok=True)
+        pool_jpg = pool / f"{job.id}{suffix}.jpg"
+        shutil.copy2(jpg, pool_jpg)
+        ctx.log(f"→ 공용 출력: {pool_jpg}")
+        written.append(str(pool_jpg))
     l_equi = imageio.read_rgba(job.path(2, "L_equi.png"))
     r_equi = imageio.read_rgba(job.path(2, "R_equi.png"))
     prev = np.concatenate([imageio.flatten_rgba(l_equi), imageio.flatten_rgba(r_equi)], axis=1)

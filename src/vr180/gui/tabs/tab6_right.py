@@ -7,6 +7,7 @@ import gradio as gr
 from vr180.gui import common as C
 
 STAGE = 6
+RUN_LABEL = "▶ 실행 (Stage 6)"
 
 
 def load(job_id):
@@ -24,11 +25,27 @@ def load(job_id):
 
 
 def build(shared):
-    with gr.Tab("6 Right 합성"):
+    with gr.Tab("6 Right 합성", id=STAGE):
         with gr.Row():
-            hole = gr.Slider(0, 5000, value=400, step=50, label="hole_px (이하: Telea, 초과: inpaint 모델)")
-            inp = gr.Dropdown(["opencv", "sdxl", "flux"], value="opencv", label="큰 구멍 inpainter")
-            run_btn = gr.Button("실행 (Stage 6 부터)", variant="primary")
+            inp = gr.Dropdown(
+                ["opencv", "sdxl", "flux"],
+                value="opencv",
+                label="큰 구멍 inpainter",
+                info="hole_px 초과 구멍을 메울 모델. opencv=빠른 Telea (기본), sdxl/flux=디테일 생성.",
+                elem_classes=["vr180-tip"],
+            )
+        with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
+            hole = gr.Slider(
+                0,
+                5000,
+                value=400,
+                step=50,
+                label="hole_px (threshold)",
+                info="이 면적(px²) 이하 구멍은 Telea 로 빠르게, 초과는 inpaint 모델로. 작을수록 모델 호출↑.",
+                elem_classes=["vr180-tip"],
+            )
+        with gr.Row(elem_classes=["vr180-actions"]):
+            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
         toggle = gr.Radio(["L", "R"], value="L", label="L/R 토글 (번갈아 눌러 시차 방향 확인)")
         lr_view = gr.Image(label="pano (L/R)", type="numpy", interactive=False)
         l_hidden = gr.State(None)
@@ -46,9 +63,18 @@ def build(shared):
         def show(which, l_img, r_img):
             return l_img if which == "L" else r_img
 
-        run_btn.click(run, [shared["job_id"], hole, inp], [shared["log"], shared["status"]]).then(
-            load, [shared["job_id"]], outputs
-        ).then(show, [toggle, l_hidden, r_hidden], [lr_view])
+        run_btn.click(
+            C.with_button_lock(run, RUN_LABEL),
+            [shared["job_id"], hole, inp],
+            [
+                run_btn,
+                shared["log"],
+                shared["log_full"],
+                shared["status"],
+                shared["progress"],
+                shared["stage_tabs"],
+            ],
+        ).then(load, [shared["job_id"]], outputs).then(show, [toggle, l_hidden, r_hidden], [lr_view])
         toggle.change(show, [toggle, l_hidden, r_hidden], [lr_view])
         shared["after_load"].append((show, [toggle, l_hidden, r_hidden], [lr_view]))
     return load, outputs
