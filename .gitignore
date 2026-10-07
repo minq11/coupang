@@ -1,5 +1,27 @@
-# 쿠팡 API 키 — 절대 커밋하지 않는다 (env.example.json을 복사해서 만들기)
-env.json
-
-# 웹스토어 제출용 빌드 산출물
+# 가상환경 / 캐시
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
 dist/
+build/
+
+# 로컬 설정
+.env
+
+# 모델 가중치 / Job 산출물 (용량 큼)
+models/*
+!models/.gitkeep
+work/*
+!work/.gitkeep
+third_party/
+
+# 테스트 입력 이미지는 사용자가 직접 넣는다 (README 참고). 작은 합성 샘플만 커밋.
+samples/*
+!samples/.gitkeep
+!samples/README.md
+
+# Gradio
+flagged/

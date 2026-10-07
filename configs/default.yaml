@@ -1,0 +1,83 @@
+# 모든 Stage 의 기본 파라미터와 모델 선택.
+# Job 생성 시 이 파일이 work/<job_id>/params.json 으로 복사되고, GUI/CLI 는 그 사본을 수정한다.
+
+stage_00_split:
+  swap_lr: false          # 입력이 우=Left 로 배열돼 있으면 true
+  rectify: false          # 수직 시차 보정 (y 방향 평행이동만)
+  matcher: sift           # sift | lightglue
+  max_features: 4000
+  dy_warn_px: 1.0         # 중앙값 |dy| 가 이 값보다 크면 경고
+
+stage_01_fov:
+  hfov_deg: 80.0          # 수동 입력. 결과 전체를 좌우하는 가장 중요한 값
+  auto_estimate: false    # GeoCalib 자동 추정 (설치돼 있고 GPU 있을 때)
+  auto_min_confidence: 0.5
+  estimator: geocalib     # geocalib | manual
+
+stage_02_reproj:
+  size: 4096              # 눈당 S×S half-equirect 캔버스
+  interpolation: lanczos  # lanczos | cubic | linear | nearest
+  preview_only_background: black   # Quest 미리보기에서 원본 밖 채울 색
+
+stage_03_outpaint:
+  inpainter: opencv       # opencv | sdxl | flux   (opencv 는 모델 없이 뼈대 확인용)
+  prompt: "indoor scene, natural lighting, photorealistic, consistent perspective"
+  negative_prompt: "text, watermark, people, blurry, distorted"
+  seed: 42
+  steps: 30
+  guidance: 7.0
+  tile_res: 1024          # 타일 해상도 (고정 권장)
+  tile_fov_deg: 90.0
+  tile_yaws_deg: [-60, 0, 60]
+  tile_pitches_deg: [-45, 0, 45]
+  feather_px: 64
+  mask_dilate_px: 8
+  strength: 1.0
+  # 비워 두면 전체 타일. 특정 타일만 재생성하려면 이름 나열: ["y+60_p0", ...]
+  only_tiles: []
+  # true 면 기존 tiles/ 결과를 재사용하고 only_tiles 만 다시 만든다
+  reuse_existing_tiles: false
+
+stage_04_stereo:
+  matcher: sgbm           # sgbm | raft_stereo | raft_flow   (sgbm 은 OpenCV, 모델 없음)
+  max_disparity: 256      # 픽셀. 원본 해상도 기준
+  angular_exact: true     # Δθ = d_px / f / (1 + x²)  (false 면 d_px / f)
+  raft_iters: 32
+  raft_weights: middlebury   # middlebury | sceneflow | eth3d
+
+stage_05_depth:
+  estimator: da2_large    # da2_large | da2_base | da2_small | none (none 이면 stereo disparity 를 바깥으로 외삽)
+  tile_mode: true         # Stage 3 과 같은 타일 분할로 mono depth. false 면 pano 전체에 한 번
+  band_deg: 5.0           # 원본 경계 안쪽 피팅 띠 폭
+  blend_deg: 8.0          # 경계 블렌딩 폭
+  ransac_iters: 500
+  ransac_thresh: 0.004    # rad. 각도 disparity 단위 inlier 임계값
+  polar_start_deg: 75.0   # 이 위도부터 disparity 를 줄이기 시작
+  polar_min_disp: 0.0     # 극에서의 최소 disparity (rad)
+  override_a: null        # 수동 오버라이드 (null 이면 피팅값)
+  override_b: null
+  min_inlier_ratio: 0.6
+
+stage_06_right:
+  hole_px: 400            # 이 면적(px²) 이하 구멍은 Telea, 초과는 inpaint 모델
+  inpainter: opencv       # opencv | sdxl | flux
+  blend_deg: 8.0
+  splat_taps: 2           # 1 | 2  (2 면 양 옆 픽셀에도 splat 해서 균열 감소)
+
+stage_07_output:
+  suffix: _180_3dh        # _180_3dh | _LR | ""
+  jpg_quality: 95
+  write_xmp: true
+  write_jpg: true
+
+models:
+  sdxl_inpaint_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+  flux_fill_id: black-forest-labs/FLUX.1-Fill-dev
+  flux_fill_gguf_repo: YarvixPA/FLUX.1-Fill-dev-GGUF
+  flux_fill_gguf_file: flux1-fill-dev-Q4_K_S.gguf
+  flux_quant: gguf        # gguf | nf4 | none
+  da2_large_id: depth-anything/Depth-Anything-V2-Large-hf
+  da2_base_id: depth-anything/Depth-Anything-V2-Base-hf
+  da2_small_id: depth-anything/Depth-Anything-V2-Small-hf
+  raft_stereo_repo: https://github.com/princeton-vl/RAFT-Stereo.git
+  device: auto            # auto | cuda | cpu

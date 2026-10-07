@@ -1,0 +1,83 @@
+[project]
+name = "vr180"
+version = "0.1.0"
+description = "3D SBS 이미지 1장을 Meta Quest용 VR180 SBS 이미지로 변환하는 로컬 파이프라인"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+dependencies = [
+    # 기하 / 영상 처리 (모델 없이 Stage 0~2, 5(정합), 6(워핑), 7 이 돌아가는 최소 집합)
+    "numpy>=1.26,<2.3",
+    "opencv-python>=4.10,<4.13",
+    "pillow>=10.4",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "tqdm>=4.66",
+    # GUI
+    "gradio>=5.0,<6",
+    # 모델 (CUDA 12.x 휠은 [tool.uv] 의 PyTorch 인덱스에서 받는다)
+    "torch>=2.4,<2.8",
+    "torchvision>=0.19,<0.23",
+    "diffusers>=0.32",
+    "transformers>=4.46",
+    "accelerate>=1.0",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.26",
+    "gguf>=0.10",
+    "sentencepiece>=0.2",
+    "protobuf>=4.25",
+]
+
+[project.optional-dependencies]
+# FLUX NF4 양자화 (GGUF 대신 쓸 때). Windows 휠은 bitsandbytes>=0.43.2 부터.
+nf4 = ["bitsandbytes>=0.43.2"]
+# Stage 1 자동 FOV 추정
+geocalib = ["geocalib @ git+https://github.com/cvg/GeoCalib.git"]
+# Stage 0 특징점 매칭 대안
+lightglue = ["lightglue @ git+https://github.com/cvg/LightGlue.git"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+vr180 = "vr180.cli:main"
+vr180-gui = "vr180.cli:gui_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vr180"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+default-groups = ["dev"]
+
+# PyTorch CUDA 12.4 휠. Windows/Linux 모두 같은 인덱스. (macOS 는 PyPI 기본 휠)
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]

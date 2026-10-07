@@ -1,123 +1,81 @@
-# 쿠팡 순위 파인더 (크롬 확장)
+# vr180 — 3D SBS → VR180 SBS 이미지 변환 파이프라인
 
-쿠팡 검색결과 페이지에서 **내 상품이 몇 위인지** 확인하는 셀러용 크롬 확장입니다.
+일반 3D SBS 이미지 1장을 입력받아 Meta Quest에서 볼 수 있는 VR180 SBS 이미지 1장을 만든다.
+원본이 찍은 화각 안쪽은 원본 L/R을 그대로 유지하고, 그 바깥(좌우·상하)만 AI로 생성해 채운다.
 
-- 셀러가 직접 열어둔 검색결과 페이지의 DOM을 읽는 방식 (별도 크롤링 서버 없음)
-- 팝업 버튼을 누른 순간에만 동작 (백그라운드 자동 추적 없음)
-- **다중 페이지 스캔**: 버튼 한 번으로 1~10페이지까지 훑어 전체 순위 계산 (기본 3페이지)
-- **페이지 하이라이트**: 검색결과 화면에서 내 상품에 테두리 + 순위 뱃지 표시
-- **순위 기록·변화 추적**: 조회할 때마다 자동 기록, 직전 대비 ▲▼ 표시 + 스파크라인 차트
-- **페이지 경쟁 분석**: 평균가·가격 분포·광고 비중·리뷰수 대비 내 상품 위치
-- **로켓 뱃지 구분**: 로켓배송/판매자로켓 여부 표시
-- **CSV 내보내기 + JSON 백업/복원**: 엑셀 호환 저장, 브라우저 이전 지원
-- **상품 URL 붙여넣기 인식**: 상품ID를 몰라도 상품 페이지 주소만 붙여넣으면 됨
-- 쿠팡 WING Open API 연동: 내 등록상품 목록·키워드 제안·오늘 주문 현황
-  (설정 탭에서 키 직접 입력 또는 env.json — 둘 다 지원)
-- Manifest V3, 순수 JS/HTML/CSS (프레임워크 없음)
+설계서: [3D SBS → VR180 SBS 이미지 변환 파이프라인 설계서](https://claude.ai/artifact/5tQi2C83bEbpQp872YACKG)
 
-## 설치 (개발자 모드 — 웹스토어 게시 전 테스트용)
+## 환경
 
-1. 이 저장소를 다운로드(또는 `git clone`)합니다.
-2. 크롬 주소창에 `chrome://extensions` 를 입력해 확장 프로그램 페이지를 엽니다.
-3. 우측 상단의 **개발자 모드** 토글을 켭니다.
-4. **압축해제된 확장 프로그램을 로드** 버튼을 누르고, 이 폴더(manifest.json이 있는 폴더)를 선택합니다.
-5. 목록에 "쿠팡 순위 파인더"가 나타나면 설치 완료입니다.
+- Windows 11 + RTX 3080 Ti (12GB) 기준. Linux 도 동일하게 동작.
+- Python 3.11, [uv](https://docs.astral.sh/uv/). conda / Docker 는 쓰지 않는다.
+- 모델 가중치는 저장소에 없고 `models/` 아래로 내려받는다. 외부 서비스 호출 없음.
 
-> 코드나 `env.json`을 수정한 뒤에는 `chrome://extensions`에서 새로고침(↻) 버튼을 누르고,
-> 열려 있던 쿠팡 탭도 새로고침해야 변경이 반영됩니다.
-
-## 사용법 — 순위 조회
-
-1. [coupang.com](https://www.coupang.com)에서 원하는 키워드로 검색합니다.
-   (주소가 `https://www.coupang.com/np/search?q=...` 형태인 페이지)
-2. 툴바에서 확장 아이콘을 눌러 팝업을 엽니다.
-3. **순위 조회** 탭에 내 상품ID를 입력합니다. 여러 개면 쉼표나 줄바꿈으로 구분합니다.
-   - 상품ID는 상품 상세페이지 주소 `coupang.com/vp/products/여기숫자` 부분입니다.
-   - productId 외에 itemId, vendorItemId로도 매칭됩니다.
-4. **조회 범위**를 고릅니다: 이 페이지만 / 3·5·10페이지 스캔.
-   - 다중 페이지 스캔은 1페이지부터 순서대로 읽으며, 요청 사이에 랜덤 딜레이를 둬서 차단 리스크를 낮춥니다.
-5. **순위 찾기** 버튼을 누르면 순위(광고 포함 전체 + 광고 제외 일반), 몇 페이지에 있는지,
-   상품명·가격·별점·리뷰수, 그리고 **직전 조회 대비 변화(▲▼)**가 표시됩니다.
-6. 결과 아래 **📊 페이지 경쟁 분석**에서 평균가·중앙값·가격 분포 히스토그램·광고 비중과
-   내 상품의 가격/리뷰 위치를 볼 수 있고, **CSV** 버튼으로 스캔 전체를 저장할 수 있습니다.
-
-## 순위 기록 (기록 탭)
-
-- 순위를 조회할 때마다 키워드×상품 조합별로 자동 기록됩니다 (조합당 최근 150회 보관).
-- 기록 탭에서 현재 순위, 직전 대비 변화, 최근 30회 스파크라인 차트, 상세 이력을 볼 수 있습니다.
-- **CSV** 버튼으로 전체 기록을 엑셀 호환 파일로 내보낼 수 있습니다.
-- 기록은 이 브라우저의 `chrome.storage.local`에만 저장됩니다 (외부 전송 없음).
-
-## 쿠팡 API 연동 (선택)
-
-API 키를 연결하면 **내 상품** 탭에서:
-
-- **오늘 주문 현황**: 상태별(결제완료/상품준비중/배송중 등) 주문 건수와 예상 매출 (5분 캐시)
-- **등록상품 목록**: WING에 등록된 상품을 페이징으로 불러오기
-- **키워드 제안**: 상품명에서 검색 키워드 후보를 뽑아주고, 클릭하면 해당 키워드의 쿠팡 검색이 새 탭으로 열립니다
-- **순위 조회 연동**: 상품을 선택해 매칭용 ID(productId/vendorItemId)를 순위 조회 입력창에 자동 추가
-
-### 키 설정 방법 ① — 설정 탭에서 직접 입력 (간편)
-
-쿠팡 **WING**(wing.coupang.com) → 판매자지원 → **Open API 관리**에서 키를 발급받고,
-팝업 **설정** 탭의 "API 키 입력"에 세 값을 넣고 저장하면 끝입니다.
-키는 이 브라우저의 확장 저장소에만 보관됩니다.
-
-### 키 설정 방법 ② — env 파일 (개발자용)
-
-1. 이 폴더의 `env.example.json`을 **같은 폴더에 `env.json`이라는 이름으로 복사**합니다.
-2. `env.json`을 열어 세 값을 채웁니다 (env.json이 있으면 직접 입력한 키보다 우선합니다):
-
-```json
-{
-  "COUPANG_ACCESS_KEY": "발급받은 액세스 키",
-  "COUPANG_SECRET_KEY": "발급받은 시크릿 키",
-  "COUPANG_VENDOR_ID": "A00123456"
-}
+```powershell
+uv sync                      # .venv 생성 + 의존성 설치 (PyTorch CUDA 12.4 휠 포함)
+copy .env.example .env       # (선택) HF_HOME, 작업 폴더 등
+uv run vr180 make-sample samples/synthetic_sbs.png   # 합성 테스트 입력
+uv run vr180 run -i samples/synthetic_sbs.png        # 모델 없이 뼈대 실행 (opencv/sgbm)
+uv run vr180-gui                                     # http://127.0.0.1:7860
 ```
 
-3. `chrome://extensions`에서 확장 새로고침(↻)을 누릅니다.
-4. 팝업 **설정** 탭에서 "API 연결됨"이 표시되면 성공입니다. **연결 테스트** 버튼으로 확인할 수 있습니다.
+모델 붙이기:
 
-### 보안
+```powershell
+uv run vr180 fetch-models --da2 --sdxl           # Depth Anything V2 Large, SDXL inpainting
+uv run vr180 fetch-models --flux                 # FLUX.1 Fill dev GGUF Q4 (HF_TOKEN 필요, 비상업 라이선스)
+uv run vr180 fetch-models --raft-stereo          # RAFT-Stereo 코드(third_party/) + middlebury 가중치
+uv run vr180 run -i x.png -s stage_03_outpaint.inpainter=sdxl -s stage_04_stereo.matcher=raft_stereo -s stage_05_depth.estimator=da2_large
+```
 
-- `env.json`은 `.gitignore`에 등록되어 있어 **git에 커밋되지 않습니다.**
-- 키는 내 PC의 확장 폴더 안에만 존재하며, 쿠팡 API 서버 외에는 어디로도 전송되지 않습니다.
-- Secret Key는 팝업 화면에도 표시하지 않습니다 (Access Key는 앞 4자리만 표시).
+## 구조
 
-## 파일 구조
+```
+configs/default.yaml      모든 Stage 기본 파라미터, 모델 선택
+work/<job_id>/            Job 별 중간 산출물 (params.json + Stage 폴더마다 meta.json)
+src/vr180/geometry/       sphere.py (좌표 규약, 여기만), reproject.py, warp.py
+src/vr180/models/         Inpainter / DepthEstimator / StereoMatcher / FovEstimator 인터페이스와 구현체
+src/vr180/pipeline/       job.py (캐시, from-stage 재실행), stage_00_split … stage_07_output
+src/vr180/gui/            Gradio 앱, 탭 하나당 파일 하나
+tests/                    기하 단위 테스트 + 더미 end-to-end
+```
 
-| 파일 | 역할 |
-|---|---|
-| `manifest.json` | MV3 설정. 쿠팡 검색 페이지에만 콘텐츠 스크립트 주입, 최소 권한 |
-| `content.js` | 검색결과 DOM 파싱 + 다중 페이지 스캔 + 내 상품 하이라이트 |
-| `popup.html/css/js` | 4탭 UI (순위 조회 / 기록 / 내 상품 / 설정), 라이트·다크 모드 자동 대응 |
-| `background.js` | 서비스워커. API 키 로드(env.json 또는 직접 입력) + 쿠팡 API 호출 중계 |
-| `api/coupang-api.js` | 쿠팡 WING Open API 클라이언트 (HMAC-SHA256 서명 포함) |
-| `env.example.json` | API 키 템플릿 — `env.json`으로 복사해서 사용 (선택) |
-| `icons/` | 확장 아이콘 (16/48/128px) |
-| `scripts/build-zip.sh` | 웹스토어 제출용 zip 생성 |
-| `docs/store-listing.md` | 웹스토어 게시 자료 (설명문·권한 사유·체크리스트) |
-| `docs/privacy-policy.md` | 개인정보처리방침 (게시 시 URL 필요) |
-| `docs/marketing.md` | 마케팅 플랜 + 카페/블로그/DM 초안 |
+Stage 와 산출물:
 
-## 쿠팡 DOM이 바뀌어서 파싱이 안 될 때
+| # | Stage | 산출물 |
+|---|-------|--------|
+| 0 | split | `L.png` `R.png` `rectify_report.json` |
+| 1 | fov | `camera.json` |
+| 2 | reproj | `L_equi.png` `R_equi.png` `valid_mask.png` `preview_sbs.png` |
+| 3 | outpaint | `pano_L.png` `tiles/` |
+| 4 | stereo | `disp_center.npy` `disp_center_equi.npy` + 미리보기 |
+| 5 | depth | `mono_invdepth.npy` `disp_full.npy` `fit_report.json` `fit_scatter.png` |
+| 6 | right | `pano_R.png` `hole_mask.png` `anaglyph.png` |
+| 7 | output | `output_VR180_SBS_180_3dh.png/.jpg` `preview_original_only.png` |
 
-쿠팡은 검색결과 페이지 구조를 자주 바꿉니다. 파싱이 안 되면:
+## CLI
 
-1. 팝업에서 "상품 목록을 찾지 못했습니다" 메시지가 뜨는지 확인합니다.
-2. `content.js` **맨 위의 `SELECTORS` 상수**만 고치면 됩니다. 모든 셀렉터가 이 한 곳에 모여 있습니다.
-3. 고치는 법: 쿠팡 검색결과 페이지에서 `F12` → 상품 카드에 우클릭 → 검사 →
-   해당 요소의 태그/클래스를 확인하고, `SELECTORS`의 해당 후보 배열 **맨 앞에** 새 셀렉터를 추가합니다.
-4. 각 항목은 후보 배열이라 앞에서부터 순서대로 시도하므로, 기존 셀렉터를 지울 필요 없이 추가만 하면 됩니다.
+```
+vr180 run -i x.png                       새 Job, 전체 실행
+vr180 run -j <job> --from-stage 3        Stage 3 부터 재실행 (0~2 는 캐시)
+vr180 run -j <job> -s stage_03_outpaint.prompt="outdoor, sunny"
+vr180 status -j <job>                    Stage 별 done / stale / missing
+vr180 jobs
+```
 
-파싱이 잘 되는지는 팝업 하단의 **"전체 파싱 결과 보기"**를 펼쳐서
-실제 페이지의 상품 순서와 비교하면 확인할 수 있습니다.
+중간 산출물을 외부 툴로 고쳐 덮어쓰면(예: `03_outpaint/pano_L.png`) 그 다음 Stage 부터 재실행 시 고친 파일을 그대로 쓴다.
 
-API 엔드포인트 경로가 바뀐 경우에는 `api/coupang-api.js` 상단의 `ENDPOINTS` 상수를 고치면 됩니다.
+## 테스트
 
-## 지금 안 만든 것 (의도적으로)
+```
+uv run pytest
+```
 
-- 웹스토어 게시, 라이선스 인증, 별도 서버
-- 백그라운드 24시간 자동 순위 추적
-- 여러 페이지 자동 넘기기(페이지네이션 크롤링)
+## 모델과 라이선스
+
+| 역할 | 기본 (모델 없음) | 모델 |
+|------|------------------|------|
+| 주변부 inpaint | OpenCV Telea | SDXL inpainting (fp16 ≈ 7GB), FLUX.1 Fill dev GGUF Q4 / NF4 (**비상업 라이선스**) |
+| stereo disparity | OpenCV SGBM | RAFT-Stereo (middlebury), torchvision RAFT flow |
+| mono depth | stereo 외삽 | Depth Anything V2 Large / Base / Small (Apache-2.0은 Small 만, Base/Large 는 CC-BY-NC-4.0) |
+| FOV 추정 | 수동 | GeoCalib (`uv sync --extra geocalib`) |
