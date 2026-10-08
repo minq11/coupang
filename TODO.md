@@ -1,7 +1,59 @@
 # TODO
 
 설계서(1차 범위) 이후에 추가하기로 한 항목. 각 항목은 "왜 → 무엇을 → 어디를 고치나 → 파라미터 → 검증" 순서로 적는다.
-구현 순서는 1 → 2. 2 는 1 의 범위 제한을 그대로 쓴다.
+구현 순서는 0 → 1 → 2. 1 은 0 의 두 모드 모두에 적용되고, 2 는 0·1 을 그대로 쓴다.
+
+---
+
+## 0. 입력 모드 추가: 2D 사진 직접 입력 (`input_mode: mono`) — 최우선
+
+### 왜
+- 실제 입력은 "2D 사진 → 외부 툴로 깊이 추정 → SBS" 로 만든 **합성 스테레오** 다. 이걸 다시 Stage 4 로 매칭하고 Stage 5 로 피팅하는 건
+  `깊이 → 워핑 → 측정 → 깊이 → 피팅` 의 왕복이라 정보만 잃는다 (워핑 구멍 메우기·매칭 오류가 섞인 복사본에 맞추는 꼴).
+- 2D 를 직접 받으면 Stage 4 가 사라지고, 가운데와 주변부의 깊이가 **같은 모델·같은 그림** 에서 나와 처음부터 연속이다.
+  경계에서 입체감이 튀는 문제가 구조적으로 없어지고, 외부 2D→3D 툴도 필요 없어진다.
+- 영상(2번)에서 이득이 더 크다: 프레임마다 외부 툴로 SBS 를 만드는 과정이 통째로 빠진다.
+- 실제 스테레오 카메라 사진은 여전히 `input_mode: sbs`(지금 구조)로 처리한다. 두 모드는 코드를 대부분 공유한다.
+
+### 파라미터
+- `params["_job"]["input_mode"]`: `sbs` | `mono`. Job 생성 시 지정 (`vr180 run -i x.jpg --mode mono`, GUI 라디오). 기본값은 `mono` 로 바꾼다 (실제 사용 입력이 2D 이므로).
+- `stage_05_depth.depth_strength`: 각도 disparity 최댓값(rad). mono 모드에서 상대 inverse depth 를 시차로 바꾸는 유일한 눈금.
+  기본 0.02 (≈1.1°, Quest 에서 편한 수준). GUI 슬라이더 0~0.06.
+- `stage_05_depth.depth_map_path`: 선택. 외부 툴이 만든 깊이 지도(PNG/npy)를 그대로 쓰고 싶을 때. 비우면 Depth Anything.
+- `stage_06_right.mono_symmetric`: true 면 가운데 뷰를 양쪽으로 ±d/2 워핑 (기본). false 면 가운데 뷰 = 왼눈, 오른눈만 −d 워핑.
+
+### Stage 별 변경 (mono 모드)
+| Stage | sbs (지금) | mono |
+|---|---|---|
+| 0 split | 가운데 자르기 + SIFT 수직 시차 | 자르기 없음. `C.png` 하나 저장. rectify_report 는 `{"mode":"mono"}` |
+| 1 fov | L.png 로 추정 | C.png 로 추정. 변경 없음 |
+| 2 reproj | L_equi, R_equi, valid_mask | `C_equi.png`, valid_mask. (L_equi/R_equi 는 만들지 않는다) |
+| 3 outpaint | L_equi → pano_L | C_equi → `pano_C.png` |
+| 4 stereo | SGBM/RAFT → disp_center_equi | **건너뜀** (outputs 비어 있음, meta 에 skipped 기록) |
+| 5 depth | mono depth + RANSAC 피팅 + 블렌딩 | pano_C 전체에 mono depth 한 번(타일 or 전체). 피팅 없음: `disp = depth_strength × normalize(invdepth)` (1~99 백분위로 0..1 정규화). 극지방 완화·범위 페이드는 동일 |
+| 6 right | pano_L → 워핑 → pano_R, 원본 영역은 R_equi | pano_C 를 +d/2 로 워핑 → `pano_L.png`, −d/2 로 워핑 → `pano_R.png`. 구멍은 양쪽에 반씩. 원본 영역도 워핑한다 (진짜 R 이 없으므로). 산출물 이름은 sbs 모드와 같게 유지 → Stage 7 변경 없음 |
+| 7 output | pano_L + pano_R | 동일 |
+
+- `pipeline/job.py`: Stage 모듈의 `inputs()/outputs()` 가 `job.input_mode` 를 보고 다른 목록을 돌려준다. `run()` 은 outputs 가 빈 Stage 를 "skipped" 로 처리한다.
+- `geometry/warp.py`: `forward_warp` 는 그대로. 음수 disparity(반대 방향 워핑)가 들어와도 z-buffer 가 맞도록 "가까운 쪽이 이김" 판정을 `|disp|` 기준으로 바꾼다.
+- Stage 6 의 `_fill_holes` 는 양 눈에 각각 호출. 애너글리프는 pano_L/pano_R 로 동일.
+- `sample.py`: `make_mono` 추가 (make_sbs 의 가운데 카메라 1대).
+
+### GUI
+- 상단 "새 Job" 옆에 입력 모드 라디오 (2D 사진 / 3D SBS).
+- 탭 0: mono 면 수직 시차 히스토그램·swap_lr·rectify 숨김, 원본 1장만 표시.
+- 탭 4: mono 면 "이 모드에서는 건너뜀" 안내만.
+- 탭 5: mono 면 band/blend/a,b 오버라이드 숨기고 `depth_strength` 슬라이더 + 깊이 지도 파일 입력 표시.
+- 탭 6: L/R 토글이 pano_L/pano_R (둘 다 워핑 결과).
+
+### 검증
+- `tests/test_job.py`: mono 더미 end-to-end. Stage 4 가 skipped, pano_L/pano_R 이 서로 좌우 대칭 방향으로 밀렸는지(한 깊이 평면 샘플에서 L 은 +du, R 은 −du), 최종 SBS 크기.
+- `tests/test_warp.py`: 음수 disparity 워핑 방향 테스트.
+- Quest 체크: 가운데 원본이 선명한지(양쪽으로 반씩 밀어 보간이 두 번 들어가므로 Lanczos 유지), 경계에서 입체감 연속.
+
+### 설계서 반영
+- "목표와 범위 > 입력" 을 "2D 사진(기본) 또는 3D SBS" 로. "8개 Stage… Right eye 주변부는 disparity 워핑" 문장에 mono 모드 설명 추가.
+- 구현 순서: 0번을 Stage 4(stereo) 앞에 둔다. mono 모드부터 Quest 로 확인하고, sbs 모드의 Stage 4/5 피팅은 실제 스테레오 입력이 생길 때 검증.
 
 ---
 
@@ -14,9 +66,12 @@
 
 ### 범위의 정의
 - equirect 각도 (θ, φ) 기준 타원. `r = sqrt((θ / (h/2))² + (φ / (v/2))²)`, `r ≤ 1` 이면 범위 안.
-  - h = `extent_h_deg`, v = `extent_v_deg`. 둘 다 180 이면 기능 꺼짐(지금과 동일).
+  - **기본은 "원본 화각 + 여유"**: `h = hfov + 2·extent_margin_h_deg`, `v = vfov + 2·extent_margin_v_deg` (기본 여유 좌우 20°, 상하 25°).
+  80° 16:9 사진이면 자동으로 약 120×100 이 되고, 110° 4:3 이면 약 150×144 가 된다.
+  실측(그림으로 확인): 110° 4:3 사진에 120×100 고정값을 쓰면 원본이 범위 밖으로 삐져나와 가장자리가 페이드로 어두워진다. 그래서 고정값은 옵션으로만 둔다.
+- 고정값 옵션: `extent_h_deg`, `extent_v_deg` 를 직접 주면 그 값을 쓴다 (null 이면 위 규칙). 둘 다 180 이면 기능 꺼짐(지금과 동일).
+- 어느 경우든 범위가 `valid_mask` + 페이드 폭보다 작으면 경고 후 자동으로 키운다.
 - 페이드 가중치 w: `r ≤ 1 − f` 에서 1, `r = 1` 에서 0, 사이는 smoothstep. `f` 는 `extent_fade_deg` 를 반지름 비율로 환산한 값.
-- 범위는 원본 유효 영역(valid_mask)을 페이드 폭만큼 여유 있게 포함해야 한다. 작으면 경고 후 자동으로 키운다.
 - 모양을 타원으로 한 이유: 각도 기준 사각형은 공에 감았을 때 모서리가 뾰족하게 튀고, 타원은 비네팅처럼 자연스럽다. (열린 결정: 둥근 사각형 옵션 `extent_shape: ellipse | rounded_rect`)
 
 ### 소유 Stage: Stage 2
@@ -33,8 +88,10 @@
 ### 파라미터 (`configs/default.yaml` → `stage_02_reproj`)
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `extent_h_deg` | 120 | 수평 생성 범위 (전체 폭) |
-| `extent_v_deg` | 100 | 수직 생성 범위 |
+| `extent_margin_h_deg` | 20 | 원본 수평 화각 바깥으로 더 생성할 여유 (한쪽 기준) |
+| `extent_margin_v_deg` | 25 | 원본 수직 화각 바깥 여유 (한쪽 기준). 천장·바닥은 Quest 시야에 더 들어오므로 조금 넓게 |
+| `extent_h_deg` | null | 고정 수평 범위. 주면 margin 규칙 대신 사용 |
+| `extent_v_deg` | null | 고정 수직 범위 |
 | `extent_fade_deg` | 10 | 페이드 폭. 8° 미만이면 시차가 급히 0 이 돼 "깊이 벽" 이 느껴진다 |
 | `extent_color` | `[0, 0, 0]` | 바깥 색. `auto` 면 생성 경계 평균색의 20% 밝기 |
 | `extent_shape` | `ellipse` | `ellipse` / `rounded_rect` |
@@ -63,12 +120,12 @@
 **Stage 4, 7**: 변경 없음.
 
 ### GUI
-- 탭 2: 슬라이더 3개(수평 90~180, 수직 90~180, 페이드 0~30), 색 선택, 모양 선택. ImageSlider 위에 경계선 오버레이. "범위 바깥 비율 n%" 표시.
+- 탭 2: 여유 슬라이더 2개(좌우 0~50°, 상하 0~50°) + "고정값 사용" 토글 시 수평/수직 90~180 슬라이더, 페이드 0~30, 색 선택, 모양 선택. 계산된 실제 범위(예: 120×100)를 숫자로 표시. ImageSlider 위에 경계선 오버레이. "범위 바깥 비율 n%" 표시.
 - 탭 3: 타일 갤러리에 "건너뜀(범위 밖)" 라벨. 선택 재생성 CheckboxGroup 에서도 구분.
 - 탭 5: disp_full 미리보기 캡션에 "범위 바깥은 0 이 정상" 표시.
 
 ### 검증
-- `tests/test_extent.py`: h=120, v=100 에서 (0°,0°) 안 / (70°,0°) 밖 / (0°,55°) 밖, 페이드 띠 중간에서 w≈0.5, 180/180 이면 전부 255·w=1.
+- `tests/test_extent.py`: 80° 16:9 → 자동 범위가 약 120×100 인지. h=120, v=100 에서 (0°,0°) 안 / (70°,0°) 밖 / (0°,55°) 밖, 페이드 띠 중간에서 w≈0.5, 180/180 이면 전부 255·w=1.
 - `tests/test_job.py` 추가: 범위 120×100 더미 실행 후 `meta.json` 실행 타일이 4장인지, `pano_L`·`pano_R` 바깥 픽셀이 색과 일치하고 두 눈이 동일한지, `disp_full` 바깥이 0 인지.
 - Quest 체크리스트 추가: 페이드 경계에서 깊이 벽이 안 느껴질 것, 고개를 60° 돌렸을 때 어두워지는 시작이 자연스러울 것.
 
