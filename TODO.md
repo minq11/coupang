@@ -194,3 +194,28 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 1. 1번(범위 제한) 먼저. 영상에서 주변부가 작을수록 생성 품질·시간 모두 유리하다.
 2. `vr180 video` CPU 버전 + 고정 샷 경고 + 컷 감지.
 3. GPU remap, 영상 메타데이터, 느린 패닝 보완은 Quest 확인 후.
+
+---
+
+## 3. 영상 mono 경로: Video Depth Anything 로 iw3 제거
+
+### 왜
+- 2번은 iw3 가 만든 SBS 를 받는다. Video Depth Anything(VDA) 을 붙이면 2D 영상을 바로 넣을 수 있고, 가운데·주변부 깊이가 같은 모델 계열에서 나와 경계가 연속이며, 사진(mono)과 영상(mono)의 코드 경로가 같아진다.
+- VDA 는 Depth Anything V2 인코더 + 시간축 헤드. 32프레임 묶음을 겹쳐 추정해 프레임 간 깊이 떨림을 없앤다. Small(Apache-2.0) / Large(CC-BY-NC-4.0, 12GB OK). pip 없음 → `third_party/Video-Depth-Anything` + `fetch-models --vda`.
+
+### 구조
+- `models/depth_vda.py`: 새 인터페이스 `VideoDepthEstimator.inverse_depth_sequence(frames: list[np.ndarray]) -> list[np.ndarray]`.
+  청크(기본 32장, 겹침 8장)로 잘라 넣고 이어 붙인다. RAM 에 전체 프레임을 올리지 않는다.
+- `video/run.py` 에 `--mode mono` 경로:
+  1. 기준 프레임 → 이미지 파이프라인(mono) 으로 주변부 `pano_C` + 주변부 disparity 한 번 생성.
+  2. 프레임 루프: VDA 깊이 → `disp = a·invdepth + b` → 가운데 뷰를 ±d/2 워핑 → 구멍은 Telea 만(프레임마다 inpaint 모델은 금지) → 고정 주변부 위에 합성 → 인코더.
+- **눈금 a, b 는 기준 프레임에서 한 번만** 맞추고 모든 프레임에 재사용한다. VDA 는 영상 안에서 눈금이 일정한 게 장점이라 프레임마다 피팅하면 오히려 떨린다.
+- 파라미터: `video.depth_model: vda_large | vda_small`, `video.chunk: 32`, `video.overlap: 8`, `stage_05_depth.depth_strength` 공유.
+
+### 비용 / 검증
+- VDA Large 3080 Ti 에서 수 fps 예상(실측 필요). 1분 영상 ≈ 깊이 10분 안팎 + 워핑·합성.
+- 테스트: 합성 영상 10프레임에서 프레임 간 깊이 중앙값 변동 < 2%, 출력 프레임 수 일치. VDA 없으면 skip.
+- Quest: 깊이 떨림 없음, 경계 연속, 구멍 채움의 프레임 간 깜빡임 허용 수준인지.
+
+### 순서
+- 2번(iw3 → sbs) 이 Quest 에서 확인된 뒤. "주변부 붙이기" 와 "입체화" 를 분리해서 검증하기 위함.
