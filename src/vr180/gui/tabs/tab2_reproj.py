@@ -70,17 +70,24 @@ def build(shared):
             shutil.copy2(job.path(2, "preview_sbs.png"), dst)
             return f"내보냄: {dst}"
 
-        run_btn.click(
-            C.with_button_lock(run, RUN_LABEL),
-            [shared["job_id"], size, interp],
-            [
-                run_btn,
-                shared["log"],
-                shared["log_full"],
-                shared["status"],
-                shared["progress"],
-                shared["stage_tabs"],
-            ],
-        ).then(load, [shared["job_id"]], outputs)
+        shared["all_run_buttons"].append(run_btn)
+
+        def _wire():
+            others = [b for b in shared["all_run_buttons"] if b is not run_btn]
+            run_btn.click(
+                C.with_button_lock(run, RUN_LABEL, n_other=len(others)),
+                [shared["job_id"], size, interp],
+                [
+                    run_btn,
+                    *others,
+                    shared["log"],
+                    shared["log_full"],
+                    shared["status"],
+                    shared["progress"],
+                    shared["stage_tabs"],
+                ],
+            ).then(load, [shared["job_id"]], outputs)
+
+        shared["after_build_wires"].append(_wire)
         export_btn.click(export, [shared["job_id"]], [shared["log"]])
     return load, outputs

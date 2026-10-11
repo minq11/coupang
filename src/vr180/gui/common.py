@@ -197,15 +197,22 @@ CSS = """
 """
 
 
-def with_button_lock(gen_fn, idle_label: str):
+def with_button_lock(gen_fn, idle_label: str, n_other: int = 0):
     """(log_brief, log_full, status, progress_md, button_short, tab_update) 6-tuple 을
-    yield 하는 generator 를 감싸서 실행 중 버튼 잠금 + 라벨 교체. 끝나면 idle_label 복귀.
-    바깥 click 의 outputs 는 [button, log_brief, log_full, status, progress, stage_tabs] 6개여야 한다."""
+    yield 하는 generator 를 감싸서 실행 중 버튼 잠금 + 라벨 교체. n_other 개의 다른 run 버튼
+    들도 함께 비활성화 → 활성화. finally 로 에러 시에도 반드시 복구.
+
+    click outputs 순서: [clicked_btn, *other_btns, log_brief, log_full, status, progress, stage_tabs].
+    총 길이 = 1 + n_other + 5."""
 
     def wrapped(*args):
+        other_disable = [gr.update(interactive=False)] * n_other
+        other_noop = [gr.update()] * n_other
+        other_enable = [gr.update(interactive=True)] * n_other
         try:
             yield (
                 gr.update(value=RUN_LOCK_LABEL, interactive=False),
+                *other_disable,
                 gr.update(),
                 gr.update(),
                 gr.update(),
@@ -215,6 +222,7 @@ def with_button_lock(gen_fn, idle_label: str):
             for log_brief, log_full, status, progress_md, button_short, tab_update in gen_fn(*args):
                 yield (
                     gr.update(value=button_short, interactive=False),
+                    *other_noop,
                     log_brief,
                     log_full,
                     status,
@@ -224,6 +232,7 @@ def with_button_lock(gen_fn, idle_label: str):
         finally:
             yield (
                 gr.update(value=idle_label, interactive=True),
+                *other_enable,
                 gr.update(),
                 gr.update(),
                 gr.update(),

@@ -100,6 +100,10 @@ def build() -> gr.Blocks:
             "log_full": log_full,
             "input_thumb": input_thumb,
             "after_load": [],
+            # 실행 중 상호 비활성화 대상. run_all_btn 포함, 각 탭 build() 가 자기 run 버튼 append.
+            "all_run_buttons": [run_all_btn],
+            # 각 탭이 click 와이어링 closure 를 append → 포스트빌드 일괄 실행 (all_run_buttons 완성 후).
+            "after_build_wires": [],
         }
 
         # ───── Stage 탭 (완료 시 자동 다음 탭 전환을 위해 Tabs 참조 공유)
@@ -167,11 +171,27 @@ def build() -> gr.Blocks:
             # Stage 0 → 7 쭉 돌림. force_from=False 로 캐시 유효한 Stage 는 재사용.
             yield from C.run_pipeline(jid, 0, None, force_from=False)
 
-        run_all_btn.click(
-            C.with_button_lock(run_all_pipeline, RUN_ALL_LABEL),
-            [job_id],
-            [run_all_btn, log_brief, log_full, status, progress, stage_tabs],
-        ).then(load_all, [job_id], all_outputs)
+        def _wire_run_all():
+            other_btns = [b for b in shared["all_run_buttons"] if b is not run_all_btn]
+            run_all_btn.click(
+                C.with_button_lock(run_all_pipeline, RUN_ALL_LABEL, n_other=len(other_btns)),
+                [job_id],
+                [
+                    run_all_btn,
+                    *other_btns,
+                    log_brief,
+                    log_full,
+                    status,
+                    progress,
+                    stage_tabs,
+                ],
+            ).then(load_all, [job_id], all_outputs)
+
+        shared["after_build_wires"].append(_wire_run_all)
+
+        # ───── 포스트빌드: 모든 run 버튼 와이어링을 여기서 일괄 실행 (all_run_buttons 완성된 상태)
+        for wire in shared["after_build_wires"]:
+            wire()
     return demo
 
 

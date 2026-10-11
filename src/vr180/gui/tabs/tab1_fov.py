@@ -57,28 +57,37 @@ def build(shared):
         def run_12(job_id, h, a):
             yield from C.run_pipeline(job_id, STAGE, 2, {STAGE: {"hfov_deg": float(h), "auto_estimate": bool(a)}})
 
-        run_btn.click(
-            C.with_button_lock(run_1, RUN_LABEL),
-            [shared["job_id"], hfov, auto],
-            [
-                run_btn,
-                shared["log"],
-                shared["log_full"],
-                shared["status"],
-                shared["progress"],
-                shared["stage_tabs"],
-            ],
-        ).then(load, [shared["job_id"]], outputs)
-        prev_btn.click(
-            C.with_button_lock(run_12, PREV_LABEL),
-            [shared["job_id"], hfov, auto],
-            [
-                prev_btn,
-                shared["log"],
-                shared["log_full"],
-                shared["status"],
-                shared["progress"],
-                shared["stage_tabs"],
-            ],
-        ).then(load, [shared["job_id"]], outputs)
+        shared["all_run_buttons"].extend([run_btn, prev_btn])
+
+        def _wire():
+            others_run = [b for b in shared["all_run_buttons"] if b is not run_btn]
+            others_prev = [b for b in shared["all_run_buttons"] if b is not prev_btn]
+            run_btn.click(
+                C.with_button_lock(run_1, RUN_LABEL, n_other=len(others_run)),
+                [shared["job_id"], hfov, auto],
+                [
+                    run_btn,
+                    *others_run,
+                    shared["log"],
+                    shared["log_full"],
+                    shared["status"],
+                    shared["progress"],
+                    shared["stage_tabs"],
+                ],
+            ).then(load, [shared["job_id"]], outputs)
+            prev_btn.click(
+                C.with_button_lock(run_12, PREV_LABEL, n_other=len(others_prev)),
+                [shared["job_id"], hfov, auto],
+                [
+                    prev_btn,
+                    *others_prev,
+                    shared["log"],
+                    shared["log_full"],
+                    shared["status"],
+                    shared["progress"],
+                    shared["stage_tabs"],
+                ],
+            ).then(load, [shared["job_id"]], outputs)
+
+        shared["after_build_wires"].append(_wire)
     return load, outputs

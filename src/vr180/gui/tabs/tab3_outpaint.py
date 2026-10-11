@@ -230,30 +230,39 @@ def build(shared):
             shutil.copy2(f, dst)
             return f"덮어씀: {dst} — Stage 5 부터 재실행하면 반영됩니다", C.status_md(job_id)
 
-        run_btn.click(
-            C.with_button_lock(run_all, RUN_LABEL),
-            [shared["job_id"], *comps],
-            [
-                run_btn,
-                shared["log"],
-                shared["log_full"],
-                shared["status"],
-                shared["progress"],
-                shared["stage_tabs"],
-            ],
-        ).then(load, [shared["job_id"]], outputs)
-        only_btn.click(
-            C.with_button_lock(run_only, ONLY_LABEL),
-            [shared["job_id"], only, tile_prompts, *comps],
-            [
-                only_btn,
-                shared["log"],
-                shared["log_full"],
-                shared["status"],
-                shared["progress"],
-                shared["stage_tabs"],
-            ],
-        ).then(load, [shared["job_id"]], outputs)
+        shared["all_run_buttons"].extend([run_btn, only_btn])
+
+        def _wire():
+            others_run = [b for b in shared["all_run_buttons"] if b is not run_btn]
+            others_only = [b for b in shared["all_run_buttons"] if b is not only_btn]
+            run_btn.click(
+                C.with_button_lock(run_all, RUN_LABEL, n_other=len(others_run)),
+                [shared["job_id"], *comps],
+                [
+                    run_btn,
+                    *others_run,
+                    shared["log"],
+                    shared["log_full"],
+                    shared["status"],
+                    shared["progress"],
+                    shared["stage_tabs"],
+                ],
+            ).then(load, [shared["job_id"]], outputs)
+            only_btn.click(
+                C.with_button_lock(run_only, ONLY_LABEL, n_other=len(others_only)),
+                [shared["job_id"], only, tile_prompts, *comps],
+                [
+                    only_btn,
+                    *others_only,
+                    shared["log"],
+                    shared["log_full"],
+                    shared["status"],
+                    shared["progress"],
+                    shared["stage_tabs"],
+                ],
+            ).then(load, [shared["job_id"]], outputs)
+
+        shared["after_build_wires"].append(_wire)
         upload_btn.click(do_upload, [shared["job_id"], upload], [shared["log"], shared["status"]]).then(
             load, [shared["job_id"]], outputs
         )
