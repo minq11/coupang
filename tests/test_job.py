@@ -94,6 +94,30 @@ def test_mono_end_to_end_skips_stage4(work_dir, sample_mono, small_params_mono):
     assert job.path(6, "pano_L.png").exists() and job.path(6, "pano_R.png").exists()
 
 
+def test_extent_outputs_and_outside_equals(work_dir, sample_mono):
+    """Stage 2 가 extent 산출물을 쓰고, Stage 6 결과에서 바깥 픽셀이 양 눈에 동일한지."""
+    params = {
+        # 작게 잡아 fade 가 눈에 보이게. 120×100 → corners 밖.
+        "stage_02_reproj": {"size": 256, "extent_h_deg": 120, "extent_v_deg": 100, "extent_fade_deg": 10},
+        "stage_03_outpaint": {"tile_res": 128, "feather_px": 16, "inpainter": "opencv"},
+        "stage_05_depth": {"estimator": "none", "depth_strength": 0.02},
+        "stage_06_right": {"inpainter": "opencv", "mono_symmetric": True},
+    }
+    job = Job.create(sample_mono, job_id="ext1", params_override=params, input_mode="mono")
+    job.run(ctx=_ctx())
+    # Stage 2 산출물
+    for name in ("extent_mask.png", "extent_fade.png"):
+        assert job.path(2, name).exists()
+    # disp_full 은 바깥에서 0
+    disp = imageio.read_npy(job.path(5, "disp_full.npy"))
+    mask = imageio.read_mask(job.path(2, "extent_mask.png")) > 127
+    assert float(np.max(np.abs(disp[~mask]))) < 1e-5
+    # pano_L, pano_R 바깥에서 완전 동일
+    pano_l = imageio.read_rgba(job.path(6, "pano_L.png"))[..., :3]
+    pano_r = imageio.read_rgba(job.path(6, "pano_R.png"))[..., :3]
+    assert np.array_equal(pano_l[~mask], pano_r[~mask])
+
+
 def test_mono_symmetric_warp_opposite_signs(work_dir, sample_mono, small_params_mono):
     """mono 모드에서 pano_L/pano_R 이 서로 반대 방향으로 밀렸는지.
     대칭 모드 (mono_symmetric=True) 에서 같은 소스 열이 L 은 +du/2, R 은 -du/2 로 간다."""

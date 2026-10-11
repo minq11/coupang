@@ -23,9 +23,15 @@ def _pano_name(job) -> str:
 
 
 def inputs(job):
+    extent = [job.path(2, "extent_mask.png"), job.path(2, "extent_fade.png")]
     if job.input_mode == "mono":
-        return [job.path(3, "pano_C.png"), job.path(2, "valid_mask.png")]
-    return [job.path(3, "pano_L.png"), job.path(4, "disp_center_equi.npy"), job.path(2, "valid_mask.png")]
+        return [job.path(3, "pano_C.png"), job.path(2, "valid_mask.png"), *extent]
+    return [
+        job.path(3, "pano_L.png"),
+        job.path(4, "disp_center_equi.npy"),
+        job.path(2, "valid_mask.png"),
+        *extent,
+    ]
 
 
 def outputs(job):
@@ -217,6 +223,7 @@ def _run_mono(job, params: dict, ctx) -> dict:
     size = pano.shape[0]
     d = job.stage_dir(INDEX)
     depth_strength = float(params.get("depth_strength", 0.02))
+    extent_w = imageio.read_mask(job.path(2, "extent_fade.png")).astype(np.float32) / 255.0
 
     dm_path = params.get("depth_map_path")
     model_info = {"name": "none"}
@@ -267,6 +274,8 @@ def _run_mono(job, params: dict, ctx) -> dict:
     t = np.clip((np.abs(phi) - pstart) / max(math.pi / 2 - pstart, 1e-6), 0, 1).astype(np.float32)
     t = t * t * (3 - 2 * t)
     disp_full = (disp_full * (1 - t) + np.minimum(disp_full, pmin) * t).astype(np.float32)
+    # extent 페이드: 범위 밖은 시차 0 (양 눈이 완전히 같아야 깊이 벽 없음).
+    disp_full = (disp_full * extent_w).astype(np.float32)
 
     imageio.write_npy(d / "disp_full.npy", disp_full)
     prev, rng_full = imageio.colormap_preview(disp_full)
@@ -378,6 +387,9 @@ def run(job, params: dict, ctx) -> dict:
     t = t * t * (3 - 2 * t)  # smoothstep
     disp_full = disp_full * (1 - t) + np.minimum(disp_full, pmin) * t
     disp_full = np.clip(disp_full, 0, None).astype(np.float32)
+    # extent 페이드 (sbs 공통). 범위 밖은 시차 0.
+    extent_w = imageio.read_mask(job.path(2, "extent_fade.png")).astype(np.float32) / 255.0
+    disp_full = (disp_full * extent_w).astype(np.float32)
 
     imageio.write_npy(d / "disp_full.npy", disp_full)
     prev, rng_full = imageio.colormap_preview(disp_full)

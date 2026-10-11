@@ -33,7 +33,11 @@ def _dst_name(job) -> str:
 
 
 def inputs(job):
-    return [job.path(2, _src_name(job))]
+    return [
+        job.path(2, _src_name(job)),
+        job.path(2, "extent_mask.png"),
+        job.path(2, "extent_fade.png"),
+    ]
 
 
 def outputs(job):
@@ -62,6 +66,14 @@ def run(job, params: dict, ctx) -> dict:
 
     pano = imageio.read_rgba(job.path(2, _src_name(job)))
     size = pano.shape[0]
+    # extent: Stage 2 산출물. 범위 밖은 생성에서 뺀다.
+    extent_mask = imageio.read_mask(job.path(2, "extent_mask.png")) > 127
+    extent_w = imageio.read_mask(job.path(2, "extent_fade.png")).astype(np.float32) / 255.0
+    # Stage 2 meta 에서 extent 색상도 쓰고 싶으면 params 로. 기본 검정.
+    p2 = job.params.get("stage_02_reproj", {})
+    extent_color = p2.get("extent_color", [0, 0, 0]) or [0, 0, 0]
+    tile_min_new_fraction = float(p2.get("tile_min_new_fraction", 0.01))
+
     tile_res = int(params.get("tile_res", 1024))
     tiles = reproject.make_tile_grid(
         params.get("tile_yaws_deg", [-60, 0, 60]),
@@ -75,6 +87,8 @@ def run(job, params: dict, ctx) -> dict:
     dilate = int(params.get("mask_dilate_px", 8))
     tiles_dir = job.stage_dir(INDEX) / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
+    tiles_executed: list[str] = []
+    tiles_skipped: list[str] = []
 
     inpainter = get_inpainter(params.get("inpainter", "opencv"), job.model_params())
     inpainter.ctx = ctx  # inpaint 중 denoising step 마다 cancel 체크
@@ -84,15 +98,31 @@ def run(job, params: dict, ctx) -> dict:
     with inpainter:
         for i, t in enumerate(tiles):
             ctx.progress(i / n, f"타일 {t.name}")
+            # 타일이 equirect 에서 덮는 영역 (bool).
+            tile_inside, _ = t.feather_weight(size, 0)
+            # "새로 채울 픽셀" = 범위 안 ∧ (아직 알파 0) ∧ 타일 안.
+            pano_empty = pano[..., 3] < 255
+            new_px = (extent_mask & pano_empty & tile_inside).sum()
+            denom = max(int(tile_inside.sum()), 1)
+            frac = new_px / denom
+            if frac < tile_min_new_fraction and not (only and t.name in only):
+                ctx.log(f"  {t.name}: 새 픽셀 {frac * 100:.2f}% < {tile_min_new_fraction * 100:.1f}%, 생략")
+                tiles_skipped.append(t.name)
+                continue
             rgb, alpha = t.render_from_equi(pano)
             mask = (alpha < 0.999).astype(np.uint8) * 255
             if dilate > 0:
                 mask = cv2.dilate(mask, np.ones((dilate * 2 + 1, dilate * 2 + 1), np.uint8))
+            # extent 밖은 생성 마스크에서 뺀다 (범위 밖은 fade 로 채우므로).
+            if extent_mask is not None:
+                extent_tile = t.render_float_from_equi(extent_mask.astype(np.float32)) > 0.5
+                mask = (mask > 0).astype(np.uint8) * extent_tile.astype(np.uint8) * 255
             imageio.write_image(tiles_dir / f"{t.name}_in.png", rgb)
             imageio.write_image(tiles_dir / f"{t.name}_mask.png", mask)
             out_path = tiles_dir / f"{t.name}_out.png"
             if mask.max() == 0:
                 ctx.log(f"  {t.name}: 빈칸 없음, 건너뜀")
+                tiles_skipped.append(t.name)
                 result = rgb
             elif reuse and out_path.exists() and (not only or t.name not in only):
                 ctx.log(f"  {t.name}: 기존 결과 재사용")
@@ -123,23 +153,34 @@ def run(job, params: dict, ctx) -> dict:
             new_equi, inside = t.splat_to_equi(result, size)
             _, w = t.feather_weight(size, feather)
             _composite(pano, new_equi, w)
+            tiles_executed.append(t.name)
             ctx.check_cancelled()
 
     # 알파가 0 < a < 255 인 픽셀은 페더 가중치 누적이 덜 된 것일 뿐 색은 이미 있다 → 알파만 채운다.
-    # 알파 0 (어떤 타일도 못 덮은 곳, 극 근처 등) 만 Telea 로 메운다.
-    empty = pano[..., 3] == 0
-    if empty.any():
-        frac = float(empty.mean())
-        ctx.log(f"타일이 덮지 못한 영역 {frac * 100:.2f}% → Telea 보정")
+    # 알파 0 (어떤 타일도 못 덮은 곳) 중 extent_mask 안쪽만 Telea 로 메운다.
+    empty_inside = (pano[..., 3] == 0) & extent_mask
+    if empty_inside.any():
+        frac = float(empty_inside.mean())
+        ctx.log(f"타일이 덮지 못한 범위 안 영역 {frac * 100:.2f}% → Telea 보정")
         rgb = pano[..., :3].copy()
-        m = empty.astype(np.uint8) * 255
+        m = empty_inside.astype(np.uint8) * 255
         small = cv2.resize(rgb, (max(8, size // 4), max(8, size // 4)), interpolation=cv2.INTER_AREA)
         ms = cv2.resize(m, (max(8, size // 4), max(8, size // 4)), interpolation=cv2.INTER_NEAREST)
         filled = cv2.resize(
             cv2.inpaint(small, ms, 5, cv2.INPAINT_TELEA), (size, size), interpolation=cv2.INTER_CUBIC
         )
-        rgb[empty] = filled[empty]
+        rgb[empty_inside] = filled[empty_inside]
         pano[..., :3] = rgb
+    # extent 페이드 블렌드: rgb = gen × w + color × (1 − w). 바깥 (w == 0) 은 color.
+    color = np.asarray(extent_color, dtype=np.float32).reshape(1, 1, 3)
+    w3 = extent_w[..., None]
+    rgb = pano[..., :3].astype(np.float32)
+    pano[..., :3] = np.clip(rgb * w3 + color * (1.0 - w3), 0, 255).astype(np.uint8)
     pano[..., 3] = 255
     imageio.write_image(job.path(INDEX, _dst_name(job)), pano)
-    return {"model": info.as_dict(), "tiles": [t.name for t in tiles]}
+    return {
+        "model": info.as_dict(),
+        "tiles": [t.name for t in tiles],
+        "tiles_executed": tiles_executed,
+        "tiles_skipped": tiles_skipped,
+    }

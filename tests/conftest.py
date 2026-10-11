@@ -35,7 +35,8 @@ def sample_mono(tmp_path):
 
 
 SMALL = {
-    "stage_02_reproj": {"size": 256},
+    # extent 180×180 = 기능 꺼짐 (레거시 테스트는 전체 180° 생성 가정).
+    "stage_02_reproj": {"size": 256, "extent_h_deg": 180, "extent_v_deg": 180, "extent_fade_deg": 0},
     "stage_03_outpaint": {"tile_res": 128, "feather_px": 16, "inpainter": "opencv"},
     "stage_04_stereo": {"matcher": "sgbm", "max_disparity": 64},
     "stage_05_depth": {"estimator": "none"},
@@ -50,9 +51,10 @@ def small_params():
 
 @pytest.fixture
 def small_params_mono():
-    """mono 모드용 작은 파라미터 — Stage 4 는 자동 skipped, estimator=none 으로 모델 없음."""
+    """mono 모드용 작은 파라미터 — Stage 4 는 자동 skipped, estimator=none 으로 모델 없음.
+    extent 는 180 으로 꺼서 레거시 어서션(원본 외 영역)이 그대로 유효하게."""
     return {
-        "stage_02_reproj": {"size": 256},
+        "stage_02_reproj": {"size": 256, "extent_h_deg": 180, "extent_v_deg": 180, "extent_fade_deg": 0},
         "stage_03_outpaint": {"tile_res": 128, "feather_px": 16, "inpainter": "opencv"},
         "stage_05_depth": {"estimator": "none", "depth_strength": 0.02},
         "stage_06_right": {"inpainter": "opencv", "mono_symmetric": True},

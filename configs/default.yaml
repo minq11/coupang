@@ -21,6 +21,16 @@ stage_02_reproj:
   size: 4096              # 눈당 S×S half-equirect 캔버스
   interpolation: lanczos  # lanczos | cubic | linear | nearest
   preview_only_background: black   # Quest 미리보기에서 원본 밖 채울 색
+  # 생성 범위 (타원): 정면에서 몇 도까지 "제대로" 만들지. 바깥은 페이드로 어둡게.
+  # 기본은 "원본 화각 + 여유". 80° 16:9 사진이면 자동으로 ~120×100 이 됨.
+  extent_margin_h_deg: 20       # 수평 여유 (한쪽 기준). hfov + 2·margin 이 생성 범위.
+  extent_margin_v_deg: 25       # 수직 여유 (한쪽 기준). 천장·바닥은 Quest 시야에 더 들어옴.
+  extent_h_deg: null            # 고정 수평 범위. 주면 margin 대신 사용.
+  extent_v_deg: null            # 고정 수직 범위. 둘 다 180 이면 기능 꺼짐.
+  extent_fade_deg: 10           # 페이드 폭(°). 8° 미만이면 깊이 벽 느껴짐.
+  extent_color: [0, 0, 0]       # 바깥 색 (RGB 0..255).
+  extent_shape: ellipse         # ellipse | rounded_rect
+  tile_min_new_fraction: 0.01   # Stage 3: 새로 채울 픽셀이 이 비율 미만이면 타일 생략.
 
 stage_03_outpaint:
   inpainter: opencv       # opencv | sdxl | flux   (opencv 는 Telea — 빠르고 묘사 없음, 주변시 방해↓)
