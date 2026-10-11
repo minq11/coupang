@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from vr180 import paths
-from vr180.geometry import reproject
+from vr180.geometry import reproject, warp
 from vr180.pipeline.job import Job
 from vr180.util import imageio
 from vr180.util.log import RunContext
@@ -130,17 +130,37 @@ def run_video(
     motion_threshold_px: float = 2.0,
     detect_cuts: bool = False,
     cut_threshold: float = 5.0,
+    depth_model: str = "da2_video",
+    vda_chunk: int = 32,
+    vda_overlap: int = 8,
     params_override: dict | None = None,
     ctx: RunContext | None = None,
 ) -> dict:
     """영상을 VR180 SBS 영상으로 변환.
 
     - ref_frame 또는 ref_time 중 하나로 기준 프레임 선택 (기본: ref_frame=0).
-    - surround_job 이 주어지면 그 Job 의 결과 (pano_L, pano_R, valid_mask 등) 를 재사용.
-    - input_mode 는 현재 'sbs' 만 지원 (mono 는 #3 VDA).
+    - surround_job 이 주어지면 그 Job 의 결과 를 재사용.
+    - input_mode='sbs' (기본): iw3 등으로 미리 SBS 변환된 영상.
+    - input_mode='mono': 2D 영상 → VDA/DA2 로 프레임마다 깊이 추정 → pano_C 를 양방향 워핑.
     """
-    if input_mode != "sbs":
-        raise NotImplementedError(f"video input_mode={input_mode!r} 는 아직 미구현 (sbs 만 지원, mono 는 #3).")
+    if input_mode == "mono":
+        return _run_video_mono(
+            Path(input_video),
+            Path(output_video),
+            ref_frame=ref_frame,
+            ref_time=ref_time,
+            surround_job=surround_job,
+            codec=codec,
+            crf=crf,
+            fps=fps,
+            check_motion=check_motion,
+            motion_threshold_px=motion_threshold_px,
+            depth_model=depth_model,
+            vda_chunk=vda_chunk,
+            vda_overlap=vda_overlap,
+            params_override=params_override,
+            ctx=ctx or RunContext(),
+        )
     ctx = ctx or RunContext()
     input_video = Path(input_video)
     output_video = Path(output_video)
@@ -236,3 +256,209 @@ def run_video(
         "elapsed_s": elapsed,
         "mode": input_mode,
     }
+
+
+# ----------------------------------------------------------------------------- mono (#3)
+def _normalize_pct(a: np.ndarray, lo: float = 1.0, hi: float = 99.0) -> np.ndarray:
+    aa = np.asarray(a, dtype=np.float32)
+    L = float(np.percentile(aa, lo))
+    H = float(np.percentile(aa, hi))
+    if H - L < 1e-9:
+        return np.zeros_like(aa)
+    return np.clip((aa - L) / (H - L), 0.0, 1.0).astype(np.float32)
+
+
+def _fit_ab_from_frame(
+    invd: np.ndarray, pano_c_invd_proxy: np.ndarray | None, depth_strength: float
+) -> tuple[float, float]:
+    """기준 프레임의 invdepth 를 'depth_strength × normalize(invd)' 로 바로 쓰기 위한 (a, b).
+
+    disp = a·invd + b. 가장 단순: a = depth_strength / (H − L), b = −a·L.
+    프레임마다 피팅하면 떨림이 생기므로 **기준 프레임에서 1 번만** 계산.
+    """
+    aa = np.asarray(invd, dtype=np.float32)
+    L = float(np.percentile(aa, 1))
+    H = float(np.percentile(aa, 99))
+    if H - L < 1e-9:
+        return 0.0, 0.0
+    a = float(depth_strength) / (H - L)
+    b = -a * L
+    return a, b
+
+
+def _run_video_mono(
+    input_video: Path,
+    output_video: Path,
+    *,
+    ref_frame: int | None,
+    ref_time: float | None,
+    surround_job: str | None,
+    codec: str,
+    crf: int,
+    fps: float | None,
+    check_motion: bool,
+    motion_threshold_px: float,
+    depth_model: str,
+    vda_chunk: int,
+    vda_overlap: int,
+    params_override: dict | None,
+    ctx: RunContext,
+) -> dict:
+    """mono 영상 경로: 2D 입력 → 기준 프레임으로 pano_C/pano_L/pano_R 선생성 →
+    프레임마다 VDA(또는 DA2) 깊이 → 가운데 뷰 ±d/2 워핑 → Telea 로 구멍 → 고정 주변부 위에 합성."""
+    from vr180.models.depth_vda import get_video_depth_estimator
+
+    info = _frames.probe(input_video)
+    W, H = info["width"], info["height"]
+    V_FPS = fps or info["fps"]
+    ctx.log(f"[mono] 입력: {input_video} {W}x{H} {V_FPS:.2f}fps nb_frames≈{info['nb_frames']}")
+
+    if ref_time is None:
+        ref_time = (ref_frame or 0) / max(V_FPS, 1e-6)
+    if check_motion:
+        n = min(info["nb_frames"] or 300, 300)
+        _check_shot_stability(input_video, W, H, n, motion_threshold_px, ctx)
+
+    # 기준 프레임으로 이미지 파이프라인 (mono) 실행 → pano_C, pano_L, pano_R, valid, camera 획득
+    if surround_job:
+        job = Job.open(surround_job)
+        ctx.log(f"[mono] surround Job 재사용: {job.id}")
+    else:
+        job = _ensure_surround_job(input_video, ref_time, None, "mono", ctx, params_override)
+
+    cam = imageio.read_json(job.path(1, "camera.json"))
+    pano_c = imageio.read_rgba(job.path(3, "pano_C.png"))[..., :3]
+    pano_l_fixed = imageio.read_rgba(job.path(6, "pano_L.png"))[..., :3]
+    pano_r_fixed = imageio.read_rgba(job.path(6, "pano_R.png"))[..., :3]
+    valid = imageio.read_mask(job.path(2, "valid_mask.png")) > 127
+    extent_mask = imageio.read_mask(job.path(2, "extent_mask.png")) > 127
+    extent_w = imageio.read_mask(job.path(2, "extent_fade.png")).astype(np.float32) / 255.0
+    S = pano_c.shape[0]
+    hfov = math.radians(float(cam["hfov_deg"]))
+    ctx.log(f"[mono] surround: S={S} hfov={cam['hfov_deg']}°")
+
+    # 원근 → equirect remap 테이블. mono 영상은 전체가 센터 카메라.
+    mx, my, inside = reproject.pinhole_to_equi_maps(S, W, H, hfov)
+
+    # 블렌드 가중치 (valid 안쪽만 프레임, 바깥은 고정 pano)
+    p6 = job.params.get("stage_06_right", {})
+    blend_deg = float(p6.get("blend_deg", 8.0))
+    deg_px = 180.0 / S
+    blend_px = blend_deg / deg_px
+    w_in = _blend_weight(valid, blend_px)
+
+    # 기준 프레임 1장을 numpy 로 뽑아 a, b 눈금 1 회 피팅
+    p5 = job.params.get("stage_05_depth", {})
+    depth_strength = float(p5.get("depth_strength", 0.02))
+    est = get_video_depth_estimator(depth_model, job.model_params(), chunk=vda_chunk, overlap=vda_overlap)
+    if est is None:
+        raise ValueError("mono 영상에는 depth_model 이 필요합니다 (da2_video 또는 vda_large).")
+
+    # 기준 프레임 하나로 (a, b) 결정. VDA 는 영상 안에서 눈금이 일정하므로 1회면 충분.
+    ref_png_path = paths.work_dir() / "video_refs" / f"{input_video.stem}_t{int(ref_time * 1000)}.png"
+    if not ref_png_path.exists():
+        _frames.extract_frame_png(input_video, ref_time, ref_png_path)
+    ref_rgb = imageio.read_rgb(ref_png_path)
+    ctx.log(f"[mono] 기준 프레임 깊이 추정 → a, b 1회 피팅 (depth_model={depth_model})")
+    with est:
+        ref_invd = est.inverse_depth_sequence([ref_rgb])[0]
+    a_fit, b_fit = _fit_ab_from_frame(ref_invd, None, depth_strength)
+    ctx.log(f"[mono] a={a_fit:.4f} b={b_fit:.4f} depth_strength={depth_strength:.4f}")
+
+    # 메인 프레임 루프 — VDA 는 묶음 처리가 이상적이지만, DA2 폴백은 프레임별이라 공통 코드로.
+    out_w, out_h = S * 2, S
+    t0 = time.time()
+    processed = 0
+    with est:
+        with _frames.EncoderPipe(input_video, output_video, out_w, out_h, V_FPS, codec=codec, crf=crf) as enc:
+            buf_frames: list[np.ndarray] = []
+            for i, buf in enumerate(_frames.frame_iter(input_video, W, H)):
+                arr = np.frombuffer(buf, dtype=np.uint8).reshape(H, W, 3)
+                buf_frames.append(arr)
+                # 묶음 깊이 추정 (VDA 는 chunk, DA2 폴백은 그냥 1장씩)
+                if len(buf_frames) >= max(vda_chunk, 1):
+                    invd_list = est.inverse_depth_sequence(buf_frames)
+                    for arr_i, invd in zip(buf_frames, invd_list, strict=True):
+                        _emit_mono_frame(
+                            arr_i, invd, a_fit, b_fit, depth_strength,
+                            mx, my, w_in, pano_l_fixed, pano_r_fixed, pano_c,
+                            extent_mask, extent_w, S, enc,
+                        )
+                    processed += len(buf_frames)
+                    buf_frames = []
+                    dt = time.time() - t0
+                    ctx.progress(
+                        min(1.0, processed / max(info["nb_frames"], 1)),
+                        f"frame {processed}/{info['nb_frames']} ({processed / max(dt, 1e-6):.1f} fps)",
+                    )
+            # 남은 꼬리
+            if buf_frames:
+                invd_list = est.inverse_depth_sequence(buf_frames)
+                for arr_i, invd in zip(buf_frames, invd_list, strict=True):
+                    _emit_mono_frame(
+                        arr_i, invd, a_fit, b_fit, depth_strength,
+                        mx, my, w_in, pano_l_fixed, pano_r_fixed, pano_c,
+                        extent_mask, extent_w, S, enc,
+                    )
+                processed += len(buf_frames)
+    elapsed = time.time() - t0
+    ctx.log(f"[mono] 완료: {processed} 프레임, {elapsed:.1f}s → {output_video}")
+    return {
+        "input": str(input_video),
+        "output": str(output_video),
+        "surround_job": job.id,
+        "frames": processed,
+        "fps_out": V_FPS,
+        "elapsed_s": elapsed,
+        "mode": "mono",
+        "depth_model": est.info().name,
+        "a": a_fit,
+        "b": b_fit,
+    }
+
+
+def _emit_mono_frame(
+    frame_rgb: np.ndarray,
+    inv_depth: np.ndarray,
+    a: float,
+    b: float,
+    depth_strength: float,
+    mx: np.ndarray,
+    my: np.ndarray,
+    w_in: np.ndarray,
+    pano_l_fixed: np.ndarray,
+    pano_r_fixed: np.ndarray,
+    pano_c_fixed: np.ndarray,
+    extent_mask: np.ndarray,
+    extent_w: np.ndarray,
+    S: int,
+    enc,
+) -> None:
+    """프레임 1장: 원근 → equirect → ±d/2 워핑 → 구멍 Telea → 고정 pano 와 블렌딩 → 인코더."""
+    # 1) 가운데 프레임을 equirect 로
+    c_equi = cv2.remap(frame_rgb, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    # 2) 프레임 깊이 → disparity (a, b 는 기준 프레임에서 1회만 피팅됨)
+    disp = (a * inv_depth + b).astype(np.float32)
+    disp = np.clip(disp, 0.0, depth_strength).astype(np.float32)
+    # inv_depth 는 원근 좌표계 (H×W). disp 를 equirect 좌표로 remap.
+    disp_equi = cv2.remap(disp, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+    disp_equi = disp_equi * extent_w  # 범위 밖은 0 (양 눈 동일)
+
+    # 3) 가운데 뷰를 ±d/2 로 양방향 워핑
+    warped_l, cov_l = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=+0.5)
+    warped_r, cov_r = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=-0.5)
+    # 구멍은 Telea 만 (프레임마다 inpaint 모델은 금지, 비용 문제)
+    holes_l = (~cov_l & extent_mask).astype(np.uint8) * 255
+    holes_r = (~cov_r & extent_mask).astype(np.uint8) * 255
+    if holes_l.any():
+        warped_l = cv2.inpaint(warped_l, holes_l, 3, cv2.INPAINT_TELEA)
+    if holes_r.any():
+        warped_r = cv2.inpaint(warped_r, holes_r, 3, cv2.INPAINT_TELEA)
+
+    # 4) 고정 주변부 위에 합성: valid 안쪽은 프레임, 바깥은 고정 pano_L/pano_R
+    w3 = w_in[..., None]
+    frame_l_out = (w3 * warped_l.astype(np.float32) + (1 - w3) * pano_l_fixed.astype(np.float32)).astype(np.uint8)
+    frame_r_out = (w3 * warped_r.astype(np.float32) + (1 - w3) * pano_r_fixed.astype(np.float32)).astype(np.uint8)
+    sbs = np.concatenate([frame_l_out, frame_r_out], axis=1)
+    enc.write(sbs.tobytes())

@@ -91,6 +91,11 @@ stage_07_output:
   write_xmp: true
   write_jpg: true
 
+video:
+  depth_model: da2_video  # vda_large | vda_small | da2_video | none
+  chunk: 32               # VDA chunk 크기
+  overlap: 8              # VDA chunk 겹침
+
 models:
   sdxl_inpaint_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
   flux_fill_id: black-forest-labs/FLUX.1-Fill-dev

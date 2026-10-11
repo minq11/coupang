@@ -136,6 +136,9 @@ def cmd_video(a) -> int:
         check_motion=not a.no_motion_check,
         motion_threshold_px=a.motion_threshold,
         detect_cuts=a.detect_cuts,
+        depth_model=a.depth_model,
+        vda_chunk=a.vda_chunk,
+        vda_overlap=a.vda_overlap,
         params_override=override,
         ctx=ctx,
     )
@@ -217,6 +220,14 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--no-motion-check", action="store_true", help="phaseCorrelate 샷 안정성 확인 끄기")
     v.add_argument("--motion-threshold", type=float, default=2.0, help="평균 이동(px) 임계값")
     v.add_argument("--detect-cuts", action="store_true", help="히스토그램 급변으로 컷 감지(비싸므로 선택)")
+    v.add_argument(
+        "--depth-model",
+        default="da2_video",
+        choices=["none", "vda_large", "vda_small", "da2_video"],
+        help="(mono 전용) 영상 깊이 모델. VDA 미설치 시 자동으로 DA2 프레임별 폴백.",
+    )
+    v.add_argument("--vda-chunk", type=int, default=32, help="(mono) VDA chunk 크기")
+    v.add_argument("--vda-overlap", type=int, default=8, help="(mono) VDA overlap")
     v.add_argument("--set", "-s", action="append", default=[], help="파라미터 덮어쓰기: section.key=value")
     v.set_defaults(fn=cmd_video)
     return p
