@@ -117,6 +117,32 @@ def cmd_fetch_models(a) -> int:
     )
 
 
+def cmd_video(a) -> int:
+    from vr180.util.log import RunContext
+    from vr180.video.run import run_video
+
+    override = _parse_set(a.set) if a.set else None
+    ctx = RunContext()
+    res = run_video(
+        input_video=a.input,
+        output_video=a.output,
+        ref_frame=a.ref_frame,
+        ref_time=a.ref_time,
+        surround_job=a.surround_job,
+        input_mode=a.mode,
+        codec=a.codec,
+        crf=a.crf,
+        fps=a.fps,
+        check_motion=not a.no_motion_check,
+        motion_threshold_px=a.motion_threshold,
+        detect_cuts=a.detect_cuts,
+        params_override=override,
+        ctx=ctx,
+    )
+    print(f"완료: {res['output']}  surround_job={res['surround_job']}  frames={res['frames']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vr180", description="3D SBS → VR180 SBS 변환 파이프라인")
     p.add_argument("--version", action="version", version=__version__)
@@ -169,6 +195,30 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--raft-flow", action="store_true")
     f.add_argument("--all", action="store_true")
     f.set_defaults(fn=cmd_fetch_models)
+
+    v = sub.add_parser(
+        "video",
+        help="영상을 VR180 SBS 로 변환 (고정 샷 전용). 기준 프레임의 주변부를 1회 만들어 모든 프레임 재사용.",
+    )
+    v.add_argument("--input", "-i", required=True, help="입력 영상 (sbs 모드: iw3 등으로 미리 SBS 변환된 영상)")
+    v.add_argument("--output", "-o", required=True, help="출력 .mp4 경로")
+    v.add_argument(
+        "--mode",
+        choices=["sbs", "mono"],
+        default="sbs",
+        help="영상 입력 모드. 현재는 sbs 만 (mono 는 #3 VDA 에서).",
+    )
+    v.add_argument("--ref-frame", type=int, default=None, help="기준 프레임 번호 (기본 0)")
+    v.add_argument("--ref-time", type=float, default=None, help="기준 시각(초). ref-frame 과 둘 중 하나만.")
+    v.add_argument("--surround-job", default=None, help="이미 만든 Job id 를 재사용 (기준 프레임 재생성 생략)")
+    v.add_argument("--codec", default="libx265")
+    v.add_argument("--crf", type=int, default=20)
+    v.add_argument("--fps", type=float, default=None, help="출력 fps. 생략하면 입력 fps 그대로.")
+    v.add_argument("--no-motion-check", action="store_true", help="phaseCorrelate 샷 안정성 확인 끄기")
+    v.add_argument("--motion-threshold", type=float, default=2.0, help="평균 이동(px) 임계값")
+    v.add_argument("--detect-cuts", action="store_true", help="히스토그램 급변으로 컷 감지(비싸므로 선택)")
+    v.add_argument("--set", "-s", action="append", default=[], help="파라미터 덮어쓰기: section.key=value")
+    v.set_defaults(fn=cmd_video)
     return p
 
 
