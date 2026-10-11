@@ -14,8 +14,12 @@ PARAMS_KEY = "stage_01_fov"
 USES_MODELS = True
 
 
+def _src_name(job) -> str:
+    return "C.png" if job.input_mode == "mono" else "L.png"
+
+
 def inputs(job):
-    return [job.path(0, "L.png")]
+    return [job.path(0, _src_name(job))]
 
 
 def outputs(job):
@@ -23,7 +27,7 @@ def outputs(job):
 
 
 def run(job, params: dict, ctx) -> dict:
-    left = imageio.read_rgb(job.path(0, "L.png"))
+    left = imageio.read_rgb(job.path(0, _src_name(job)))
     h, w = left.shape[:2]
     hfov = float(params.get("hfov_deg", 80.0))
     source = "manual"

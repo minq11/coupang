@@ -24,6 +24,16 @@ def sample_sbs(tmp_path):
     return p
 
 
+@pytest.fixture
+def sample_mono(tmp_path):
+    from vr180.sample import make_mono
+    from vr180.util import imageio
+
+    p = tmp_path / "mono.png"
+    imageio.write_image(p, make_mono(480, 270, 80.0))
+    return p
+
+
 SMALL = {
     "stage_02_reproj": {"size": 256},
     "stage_03_outpaint": {"tile_res": 128, "feather_px": 16, "inpainter": "opencv"},
@@ -36,6 +46,17 @@ SMALL = {
 @pytest.fixture
 def small_params():
     return {k: dict(v) for k, v in SMALL.items()}
+
+
+@pytest.fixture
+def small_params_mono():
+    """mono 모드용 작은 파라미터 — Stage 4 는 자동 skipped, estimator=none 으로 모델 없음."""
+    return {
+        "stage_02_reproj": {"size": 256},
+        "stage_03_outpaint": {"tile_res": 128, "feather_px": 16, "inpainter": "opencv"},
+        "stage_05_depth": {"estimator": "none", "depth_strength": 0.02},
+        "stage_06_right": {"inpainter": "opencv", "mono_symmetric": True},
+    }
 
 
 def _unused():

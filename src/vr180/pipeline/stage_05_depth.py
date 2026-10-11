@@ -18,12 +18,27 @@ PARAMS_KEY = "stage_05_depth"
 USES_MODELS = True
 
 
+def _pano_name(job) -> str:
+    return "pano_C.png" if job.input_mode == "mono" else "pano_L.png"
+
+
 def inputs(job):
+    if job.input_mode == "mono":
+        return [job.path(3, "pano_C.png"), job.path(2, "valid_mask.png")]
     return [job.path(3, "pano_L.png"), job.path(4, "disp_center_equi.npy"), job.path(2, "valid_mask.png")]
 
 
 def outputs(job):
     d = job.stage_dir(INDEX)
+    if job.input_mode == "mono":
+        # mono: 피팅 산점도는 없음. fit_report 는 depth_strength 와 모델만 기록.
+        return [
+            d / "mono_invdepth.npy",
+            d / "disp_full.npy",
+            d / "fit_report.json",
+            d / "disp_full_preview.png",
+            d / "mono_preview.png",
+        ]
     return [
         d / "mono_invdepth.npy",
         d / "disp_full.npy",
@@ -168,7 +183,112 @@ def _mono_whole(pano_rgb: np.ndarray, est, ctx) -> np.ndarray:
     return cv2.resize(inv, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32)
 
 
+def _normalize_percentile(arr: np.ndarray, lo_pct: float = 1.0, hi_pct: float = 99.0) -> np.ndarray:
+    """1~99 백분위로 0..1 정규화. 피팅 없이 depth_strength 로 바로 쓰기 위함."""
+    a = np.asarray(arr, dtype=np.float32)
+    lo = float(np.percentile(a, lo_pct))
+    hi = float(np.percentile(a, hi_pct))
+    if hi - lo < 1e-9:
+        return np.zeros_like(a, dtype=np.float32)
+    return np.clip((a - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+
+
+def _read_depth_map(path, size: int) -> np.ndarray:
+    """외부 깊이 지도 (PNG/npy) 를 size×size inverse-depth(float32) 로 로드."""
+    from pathlib import Path as _P
+
+    p = _P(path)
+    if p.suffix.lower() == ".npy":
+        arr = imageio.read_npy(p).astype(np.float32)
+    else:
+        img = imageio.read_mask(p).astype(np.float32)  # 0..255 → inverse depth 가정
+        arr = img / 255.0
+    if arr.shape[0] != size or arr.shape[1] != size:
+        arr = cv2.resize(arr, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+    return arr
+
+
+def _run_mono(job, params: dict, ctx) -> dict:
+    """mono 모드: 피팅 없이 pano_C 전체에 mono depth 1번 → depth_strength 로 스케일."""
+    from vr180.models.registry import get_depth_estimator
+
+    pano = imageio.read_rgba(job.path(3, "pano_C.png"))
+    pano_rgb = pano[..., :3]
+    size = pano.shape[0]
+    d = job.stage_dir(INDEX)
+    depth_strength = float(params.get("depth_strength", 0.02))
+
+    dm_path = params.get("depth_map_path")
+    model_info = {"name": "none"}
+    if dm_path:
+        ctx.log(f"외부 깊이 지도 사용: {dm_path}")
+        mono = _read_depth_map(dm_path, size)
+        model_info = {"name": f"external:{dm_path}"}
+    else:
+        est = get_depth_estimator(params.get("estimator", "da2_large"), job.model_params())
+        if est is None:
+            ctx.log("estimator=none 이고 외부 깊이 지도도 없음 → 평면 disparity (뼈대용)")
+            mono = np.ones((size, size), np.float32) * 0.5
+        else:
+            model_info = est.info().as_dict()
+            ctx.log(f"mono depth = {model_info['name']} (전체 1회)")
+            with est:
+                mono = (
+                    _mono_tiled(
+                        pano_rgb,
+                        est,
+                        {
+                            k: job.params.get("stage_03_outpaint", {}).get(k, v)
+                            for k, v in {
+                                "tile_res": 1024,
+                                "tile_fov_deg": 90.0,
+                                "tile_yaws_deg": [-60, 0, 60],
+                                "tile_pitches_deg": [-45, 0, 45],
+                                "feather_px": 64,
+                            }.items()
+                        },
+                        ctx,
+                    )
+                    if params.get("tile_mode", True)
+                    else _mono_whole(pano_rgb, est, ctx)
+                )
+    imageio.write_npy(d / "mono_invdepth.npy", mono)
+    mprev, mrng = imageio.colormap_preview(mono)
+    imageio.write_image(d / "mono_preview.png", mprev)
+
+    # mono inverse depth → 1~99 백분위로 0..1 정규화 → depth_strength 곱.
+    norm = _normalize_percentile(mono, 1.0, 99.0)
+    disp_full = (depth_strength * norm).astype(np.float32)
+
+    # 극지방 완화 (sbs 와 동일 규칙)
+    _, phi = sphere.equi_angle_grid(size)
+    pstart = math.radians(float(params.get("polar_start_deg", 75.0)))
+    pmin = float(params.get("polar_min_disp", 0.0))
+    t = np.clip((np.abs(phi) - pstart) / max(math.pi / 2 - pstart, 1e-6), 0, 1).astype(np.float32)
+    t = t * t * (3 - 2 * t)
+    disp_full = (disp_full * (1 - t) + np.minimum(disp_full, pmin) * t).astype(np.float32)
+
+    imageio.write_npy(d / "disp_full.npy", disp_full)
+    prev, rng_full = imageio.colormap_preview(disp_full)
+    imageio.write_image(d / "disp_full_preview.png", prev)
+    report = {
+        "mode": "mono",
+        "depth_strength": depth_strength,
+        "disp_full_max": float(disp_full.max()),
+        "unit": "rad",
+        "preview_range_full": rng_full,
+        "preview_range_mono": mrng,
+        "model": model_info,
+    }
+    imageio.write_json(d / "fit_report.json", report)
+    ctx.log(f"mono depth_strength={depth_strength:.4f}rad disp_full max={disp_full.max():.4f}rad")
+    return {"model": model_info, "mode": "mono", "depth_strength": depth_strength}
+
+
 def run(job, params: dict, ctx) -> dict:
+    if job.input_mode == "mono":
+        return _run_mono(job, params, ctx)
+
     from vr180.models.registry import get_depth_estimator
 
     pano = imageio.read_rgba(job.path(3, "pano_L.png"))

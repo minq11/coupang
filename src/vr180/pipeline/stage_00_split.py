@@ -20,6 +20,9 @@ def inputs(job):
 
 def outputs(job):
     d = job.stage_dir(INDEX)
+    if job.input_mode == "mono":
+        # 가운데 뷰 1장만 저장. L/R 은 만들지 않는다.
+        return [d / "C.png", d / "rectify_report.json"]
     return [d / "L.png", d / "R.png", d / "rectify_report.json"]
 
 
@@ -124,6 +127,27 @@ def _lightglue(left: np.ndarray, right: np.ndarray):
 def run(job, params: dict, ctx) -> dict:
     img = imageio.read_rgb(job.input_path)
     h, w = img.shape[:2]
+    # mono 모드: 자르기·수직 보정 없이 C.png 하나만 저장.
+    if job.input_mode == "mono":
+        d = job.stage_dir(INDEX)
+        imageio.write_image(d / "C.png", img)
+        rep = {
+            "mode": "mono",
+            "width": w,
+            "height": h,
+            "num_matches": 0,
+            "dy_median_px": 0.0,
+            "dy_mean_abs_px": 0.0,
+            "dx_median_px": 0.0,
+            "dy_samples": [],
+            "swap_lr": False,
+            "rectified": False,
+            "applied_shift_px": 0.0,
+            "warning": "",
+        }
+        imageio.write_json(d / "rectify_report.json", rep)
+        ctx.log(f"mono 입력 {w}x{h} → C.png 저장")
+        return {"mode": "mono", "num_matches": 0, "dy_median_px": 0.0}
     if w % 2 != 0:
         ctx.log(f"경고: 입력 폭 {w} 이 홀수 — 마지막 열을 버립니다")
         img = img[:, : w - 1]
@@ -137,6 +161,7 @@ def run(job, params: dict, ctx) -> dict:
     rep = _match_vertical_parallax(
         left, right, params.get("matcher", "sift"), params.get("max_features", 4000)
     )
+    rep["mode"] = "sbs"
     rep["width"], rep["height"] = half, h
     rep["swap_lr"] = bool(params.get("swap_lr", False))
     warn = abs(rep["dy_median_px"]) > float(params.get("dy_warn_px", 1.0))

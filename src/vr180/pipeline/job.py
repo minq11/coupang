@@ -80,7 +80,9 @@ class Job:
         job_id: str | None = None,
         config_path: Path | None = None,
         params_override: dict | None = None,
+        input_mode: str | None = None,
     ) -> Job:
+        """input_mode: 'mono' (2D 사진 1장) | 'sbs' (스테레오 SBS). None 이면 config/override 의 _job.input_mode."""
         input_image = Path(input_image)
         if not input_image.exists():
             raise FileNotFoundError(input_image)
@@ -95,13 +97,23 @@ class Job:
         job.params = load_default_params(config_path)
         if params_override:
             _deep_update(job.params, params_override)
+        # 우선순위: 명시 인자 > params_override 의 _job.input_mode > config 기본 > "mono"
+        mode = input_mode or job.params.get("_job", {}).get("input_mode") or "mono"
+        if mode not in ("mono", "sbs"):
+            raise ValueError(f"input_mode 는 'mono' 또는 'sbs' (받은 값: {mode!r})")
         job.params["_job"] = {
             "id": job_id,
+            "input_mode": mode,
             "source": str(input_image.resolve()),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         job.save_params()
         return job
+
+    @property
+    def input_mode(self) -> str:
+        """'mono' | 'sbs'. 기본은 'sbs' (레거시 Job 호환)."""
+        return self.params.get("_job", {}).get("input_mode", "sbs")
 
     @classmethod
     def open(cls, job_id_or_dir: str | Path) -> Job:
@@ -163,8 +175,15 @@ class Job:
     def outputs_exist(self, index: int) -> bool:
         return all(Path(p).exists() for p in stages()[index].outputs(self))
 
+    def is_skipped(self, index: int) -> bool:
+        """현재 input_mode 에서 이 Stage 가 비활성인지 — outputs() 가 빈 리스트면 skipped."""
+        return len(stages()[index].outputs(self)) == 0
+
     def status(self, index: int) -> str:
-        """'missing' | 'stale' | 'done'. stale = 산출물은 있지만 입력/파라미터가 바뀜."""
+        """'missing' | 'stale' | 'done' | 'skipped'. stale = 산출물은 있지만 입력/파라미터가 바뀜.
+        skipped = 현재 모드에서 이 Stage 를 쓰지 않음 (예: mono 모드의 Stage 4)."""
+        if self.is_skipped(index):
+            return "skipped"
         if not self.outputs_exist(index):
             return "missing"
         m = self.meta(index)
@@ -181,11 +200,29 @@ class Job:
 
     # ------------------------------------------------------------------ 실행
     def run_stage(self, index: int, ctx: RunContext | None = None, force: bool = False) -> str:
-        """반환: 'cached' | 'ran'."""
+        """반환: 'cached' | 'ran' | 'skipped'."""
         ctx = ctx or RunContext()
         st = stages()[index]
         sd = self.stage_dir(index)
         sd.mkdir(parents=True, exist_ok=True)
+        # Skipped: 현재 input_mode 에서 outputs()==[] 인 Stage. meta 만 적고 지나간다.
+        if self.is_skipped(index):
+            meta_p = sd / "meta.json"
+            if meta_p.exists() and (self.meta(index) or {}).get("skipped"):
+                ctx.log(f"Stage {index} {st.NAME}: 모드에서 건너뜀 (캐시)")
+                return "cached"
+            imageio.write_json(
+                meta_p,
+                {
+                    "stage": index,
+                    "name": st.NAME,
+                    "skipped": True,
+                    "reason": f"input_mode={self.input_mode}",
+                    "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            ctx.log(f"Stage {index} {st.NAME}: 모드에서 건너뜀 (input_mode={self.input_mode})")
+            return "skipped"
         for p in st.inputs(self):
             if not Path(p).exists():
                 raise FileNotFoundError(f"Stage {index} 입력이 없음: {p} (이전 Stage 를 먼저 실행)")
@@ -228,7 +265,9 @@ class Job:
         to_stage = n - 1 if to_stage is None else to_stage
         results: list[str] = []
         for i in range(0, from_stage):
-            if not self.outputs_exist(i):
+            if self.is_skipped(i):
+                results.append(self.run_stage(i, ctx))  # skipped meta 만 보장
+            elif not self.outputs_exist(i):
                 results.append(self.run_stage(i, ctx))
             else:
                 results.append("kept")

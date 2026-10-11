@@ -24,12 +24,20 @@ TILE_HINTS = {  # 프롬프트 뒤에 붙는 방향 힌트
 }
 
 
+def _src_name(job) -> str:
+    return "C_equi.png" if job.input_mode == "mono" else "L_equi.png"
+
+
+def _dst_name(job) -> str:
+    return "pano_C.png" if job.input_mode == "mono" else "pano_L.png"
+
+
 def inputs(job):
-    return [job.path(2, "L_equi.png")]
+    return [job.path(2, _src_name(job))]
 
 
 def outputs(job):
-    return [job.path(INDEX, "pano_L.png")]
+    return [job.path(INDEX, _dst_name(job))]
 
 
 def _composite(pano: np.ndarray, new_rgb: np.ndarray, weight: np.ndarray) -> None:
@@ -52,7 +60,7 @@ def _composite(pano: np.ndarray, new_rgb: np.ndarray, weight: np.ndarray) -> Non
 def run(job, params: dict, ctx) -> dict:
     from vr180.models.registry import get_inpainter
 
-    pano = imageio.read_rgba(job.path(2, "L_equi.png"))
+    pano = imageio.read_rgba(job.path(2, _src_name(job)))
     size = pano.shape[0]
     tile_res = int(params.get("tile_res", 1024))
     tiles = reproject.make_tile_grid(
@@ -133,5 +141,5 @@ def run(job, params: dict, ctx) -> dict:
         rgb[empty] = filled[empty]
         pano[..., :3] = rgb
     pano[..., 3] = 255
-    imageio.write_image(job.path(INDEX, "pano_L.png"), pano)
+    imageio.write_image(job.path(INDEX, _dst_name(job)), pano)
     return {"model": info.as_dict(), "tiles": [t.name for t in tiles]}

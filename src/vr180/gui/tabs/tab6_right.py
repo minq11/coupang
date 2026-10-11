@@ -14,12 +14,15 @@ def load(job_id):
     job = C.get_job(job_id)
     if job is None:
         return [400, "opencv", None, None, None, None]
+    is_mono = job.input_mode == "mono"
+    pano_l_path = job.path(6, "pano_L.png") if is_mono else job.path(3, "pano_L.png")
+    hole_path = job.path(6, "hole_mask_L.png" if is_mono else "hole_mask.png")
     return [
         int(C.get_param(job_id, STAGE, "hole_px", 400)),
         C.get_param(job_id, STAGE, "inpainter", "opencv"),
-        C.preview(job.path(3, "pano_L.png"), 2048),
+        C.preview(pano_l_path, 2048),
         C.preview(job.path(6, "pano_R.png"), 2048),
-        C.preview_mask(job.path(6, "hole_mask.png"), 1024),
+        C.preview_mask(hole_path, 1024),
         C.preview(job.path(6, "anaglyph.png"), 2048),
     ]
 

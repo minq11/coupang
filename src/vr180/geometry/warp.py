@@ -26,15 +26,18 @@ def forward_warp(
     disp_rad: np.ndarray,
     src_mask: np.ndarray | None = None,
     taps: int = 2,
+    scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Left RGB 를 disparity 로 Right 위치에 splat.
+    """RGB 를 disparity 로 splat.
 
     rgb: S×S×3 uint8, disp_rad: S×S float32, src_mask: 워핑할 픽셀 (None 이면 전체).
+    scale: disparity 에 곱할 계수. +1 = L→R 워핑(기본), −0.5 = C→L 양방향 워핑의 L 쪽 등.
     반환: warped (S×S×3 uint8), covered (S×S bool; False = hole).
-    z-buffer: 같은 목적지에 여러 소스가 오면 disparity 큰(가까운) 쪽이 이긴다.
+    z-buffer: 같은 목적지에 여러 소스가 오면 |disparity| 큰(가까운) 쪽이 이긴다.
+    (음수 scale 로 반대 방향 워핑을 할 때도 같은 "가까운 쪽" 기준으로 판정됨)
     """
     size = rgb.shape[0]
-    du = disparity_to_du(disp_rad, size)
+    du = disparity_to_du(disp_rad, size) * np.float32(scale)
     ys, xs = np.mgrid[0:size, 0:size]
     if src_mask is None:
         src_mask = np.ones((size, size), dtype=bool)
@@ -42,7 +45,7 @@ def forward_warp(
     sy = ys[sel]
     sx = xs[sel]
     tx_f = sx + du[sel]
-    dz = np.asarray(disp_rad, dtype=np.float32)[sel]
+    dz_abs = np.abs(np.asarray(disp_rad, dtype=np.float32)[sel])
     color = rgb[sel]
 
     if taps == 1:
@@ -58,13 +61,13 @@ def forward_warp(
         ok = (tx >= 0) & (tx < size)
         ty_i = sy[ok]
         tx_i = tx[ok]
-        d_i = dz[ok]
+        d_i = dz_abs[ok]
         np.maximum.at(zbuf, (ty_i, tx_i), d_i)
     for tx in tx_list:
         ok = (tx >= 0) & (tx < size)
         ty_i = sy[ok]
         tx_i = tx[ok]
-        d_i = dz[ok]
+        d_i = dz_abs[ok]
         win = d_i >= zbuf[ty_i, tx_i] - 1e-7
         out[ty_i[win], tx_i[win]] = color[ok][win]
         covered[ty_i[win], tx_i[win]] = True
@@ -72,20 +75,23 @@ def forward_warp(
 
 
 def forward_warp_float(
-    arr: np.ndarray, disp_rad: np.ndarray, src_mask: np.ndarray | None = None, taps: int = 2
+    arr: np.ndarray,
+    disp_rad: np.ndarray,
+    src_mask: np.ndarray | None = None,
+    taps: int = 2,
+    scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """스칼라 맵(예: disparity 자체)을 같은 규칙으로 워핑. 반환: warped float32, covered."""
+    """스칼라 맵(예: disparity 자체)을 같은 규칙으로 워핑. 반환: warped float32, covered.
+    scale 과 z-buffer 규칙은 forward_warp 와 동일."""
     size = arr.shape[0]
-    rgb = np.zeros((size, size, 3), dtype=np.uint8)
-    # 색 대신 인덱스를 실어 보내서 값을 가져온다
-    du = disparity_to_du(disp_rad, size)
+    du = disparity_to_du(disp_rad, size) * np.float32(scale)
     ys, xs = np.mgrid[0:size, 0:size]
     if src_mask is None:
         src_mask = np.ones((size, size), dtype=bool)
     sel = src_mask
     sy, sx = ys[sel], xs[sel]
     tx_f = sx + du[sel]
-    dz = np.asarray(disp_rad, dtype=np.float32)[sel]
+    dz_abs = np.abs(np.asarray(disp_rad, dtype=np.float32)[sel])
     vals = np.asarray(arr, dtype=np.float32)[sel]
     tx_list = (
         [np.round(tx_f).astype(np.int64)]
@@ -97,14 +103,13 @@ def forward_warp_float(
     covered = np.zeros((size, size), dtype=bool)
     for tx in tx_list:
         ok = (tx >= 0) & (tx < size)
-        np.maximum.at(zbuf, (sy[ok], tx[ok]), dz[ok])
+        np.maximum.at(zbuf, (sy[ok], tx[ok]), dz_abs[ok])
     for tx in tx_list:
         ok = (tx >= 0) & (tx < size)
-        ty_i, tx_i, d_i = sy[ok], tx[ok], dz[ok]
+        ty_i, tx_i, d_i = sy[ok], tx[ok], dz_abs[ok]
         win = d_i >= zbuf[ty_i, tx_i] - 1e-7
         out[ty_i[win], tx_i[win]] = vals[ok][win]
         covered[ty_i[win], tx_i[win]] = True
-    del rgb
     return out, covered
 
 

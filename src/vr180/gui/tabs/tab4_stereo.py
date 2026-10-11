@@ -14,6 +14,15 @@ def load(job_id):
     job = C.get_job(job_id)
     if job is None:
         return ["raft_stereo", 256, None, None, "_Job 없음_"]
+    if job.input_mode == "mono":
+        return [
+            "raft_stereo",
+            256,
+            None,
+            None,
+            "➖ **mono 모드에서는 Stage 4를 건너뜁니다.** "
+            "스테레오 매칭 대신 Stage 5의 mono depth 가 직접 쓰입니다.",
+        ]
     lp, dp = job.path(2, "L_equi.png"), job.path(4, "disp_center_preview.png")
     slider = (C.preview(lp, 2048), C.preview(dp, 2048)) if lp.exists() and dp.exists() else None
     return [

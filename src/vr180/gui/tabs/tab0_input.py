@@ -12,11 +12,29 @@ RUN_LABEL = "▶ 실행 (Stage 0)"
 
 
 def load(job_id):
+    import gradio as gr
+
     job = C.get_job(job_id)
     if job is None:
-        return [False, False, None, None, None, "_Job 없음_"]
+        return [False, False, None, None, None, "_Job 없음_", gr.update()]
+    mode = job.input_mode
     rep_p = job.path(0, "rectify_report.json")
     hist, warn = None, "_아직 실행 안 함_"
+    if mode == "mono":
+        # mono: 수직 시차 측정이 없다. 안내만.
+        if rep_p.exists():
+            warn = "📷 **mono 모드** — 자르기·수직 보정 없음, 가운데 뷰 1장을 그대로 사용합니다."
+        c = C.preview(job.path(0, "C.png"), 1024)
+        # L/R 두 슬롯 모두 C 를 보여 UX 를 단순히: "오른쪽 슬롯은 사용 안 함" 라벨 비주얼은 포기.
+        return [
+            False,
+            False,
+            c,
+            None,
+            None,
+            warn,
+            gr.update(visible=False),
+        ]
     if rep_p.exists():
         rep = imageio.read_json(rep_p)
         hist = C.histogram_image(
@@ -37,12 +55,13 @@ def load(job_id):
         C.preview(job.path(0, "R.png"), 1024),
         hist,
         warn,
+        gr.update(visible=True),
     ]
 
 
 def build(shared):
     with gr.Tab("0 입력", id=STAGE):
-        with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
+        with gr.Accordion("고급 설정 (sbs 전용, 잘 안 바꿈)", open=False) as sbs_opts:
             with gr.Row():
                 swap = gr.Checkbox(
                     label="swap_lr",
@@ -60,11 +79,11 @@ def build(shared):
             run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
         warn = gr.Markdown()
         with gr.Row():
-            l_img = gr.Image(label="L 원본", type="numpy", interactive=False)
-            r_img = gr.Image(label="R 원본", type="numpy", interactive=False)
-        hist = gr.Image(label="수직 시차 히스토그램", type="numpy", interactive=False)
+            l_img = gr.Image(label="원본 (sbs: L, mono: 전체)", type="numpy", interactive=False)
+            r_img = gr.Image(label="R 원본 (mono 에서는 비어 있음)", type="numpy", interactive=False)
+        hist = gr.Image(label="수직 시차 히스토그램 (sbs 전용)", type="numpy", interactive=False)
 
-        outputs = [swap, rect, l_img, r_img, hist, warn]
+        outputs = [swap, rect, l_img, r_img, hist, warn, sbs_opts]
 
         shared["all_run_buttons"].append(run_btn)
 

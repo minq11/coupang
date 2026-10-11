@@ -1,6 +1,9 @@
 # 모든 Stage 의 기본 파라미터와 모델 선택.
 # Job 생성 시 이 파일이 work/<job_id>/params.json 으로 복사되고, GUI/CLI 는 그 사본을 수정한다.
 
+_job:
+  input_mode: mono        # mono (2D 사진 1장) | sbs (스테레오 SBS). Job 생성 시 CLI/GUI 로 지정 가능.
+
 stage_00_split:
   swap_lr: false          # 입력이 우=Left 로 배열돼 있으면 true
   rectify: false          # 수직 시차 보정 (y 방향 평행이동만)
@@ -51,8 +54,8 @@ stage_04_stereo:
 stage_05_depth:
   estimator: da2_large    # da2_large | da2_base | da2_small | none (none 이면 stereo disparity 를 바깥으로 외삽)
   tile_mode: true         # Stage 3 과 같은 타일 분할로 mono depth. false 면 pano 전체에 한 번
-  band_deg: 5.0           # 원본 경계 안쪽 피팅 띠 폭
-  blend_deg: 8.0          # 경계 블렌딩 폭
+  band_deg: 5.0           # 원본 경계 안쪽 피팅 띠 폭 (sbs 모드)
+  blend_deg: 8.0          # 경계 블렌딩 폭 (sbs 모드)
   ransac_iters: 500
   ransac_thresh: 0.004    # rad. 각도 disparity 단위 inlier 임계값
   polar_start_deg: 75.0   # 이 위도부터 disparity 를 줄이기 시작
@@ -60,12 +63,17 @@ stage_05_depth:
   override_a: null        # 수동 오버라이드 (null 이면 피팅값)
   override_b: null
   min_inlier_ratio: 0.6
+  # mono 모드 전용:
+  depth_strength: 0.02    # 각도 disparity 최댓값(rad). ≈1.1° 가 Quest 에서 편한 수준.
+  depth_map_path: null    # 외부 툴 깊이 지도(PNG/npy) 경로. null 이면 Depth Anything.
 
 stage_06_right:
   hole_px: 400            # 이 면적(px²) 이하 구멍은 Telea, 초과는 inpaint 모델
   inpainter: opencv       # opencv | sdxl | flux
   blend_deg: 8.0
   splat_taps: 2           # 1 | 2  (2 면 양 옆 픽셀에도 splat 해서 균열 감소)
+  mono_symmetric: true    # mono 모드: true 면 가운데 뷰를 양쪽으로 ±d/2 워핑 (기본).
+                          # false 면 가운데 뷰 = 왼눈, 오른눈만 −d 워핑.
 
 stage_07_output:
   suffix: _180_3dh        # _180_3dh | _LR | ""

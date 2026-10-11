@@ -16,6 +16,12 @@ USES_MODELS = True
 
 
 def inputs(job):
+    if job.input_mode == "mono":
+        return [
+            job.path(3, "pano_C.png"),
+            job.path(5, "disp_full.npy"),
+            job.path(2, "valid_mask.png"),
+        ]
     return [
         job.path(3, "pano_L.png"),
         job.path(5, "disp_full.npy"),
@@ -26,6 +32,15 @@ def inputs(job):
 
 def outputs(job):
     d = job.stage_dir(INDEX)
+    if job.input_mode == "mono":
+        # mono: 양쪽 눈 모두 워핑 결과. pano_L, pano_R 둘 다 Stage 6 산출물.
+        return [
+            d / "pano_L.png",
+            d / "pano_R.png",
+            d / "hole_mask_L.png",
+            d / "hole_mask_R.png",
+            d / "anaglyph.png",
+        ]
     return [d / "pano_R.png", d / "hole_mask.png", d / "anaglyph.png", d / "warped_raw.png"]
 
 
@@ -76,7 +91,60 @@ def _fill_holes(rgb: np.ndarray, holes: np.ndarray, hole_px: int, inpainter, par
     return out
 
 
+def _run_mono(job, params: dict, ctx) -> dict:
+    """mono 모드: pano_C 를 ±d/2 로 양쪽 워핑. 양쪽 눈 모두 Stage 6 가 생성."""
+    from vr180.models.registry import get_inpainter
+
+    pano_c = imageio.read_rgba(job.path(3, "pano_C.png"))[..., :3]
+    disp = imageio.read_npy(job.path(5, "disp_full.npy"))
+    size = pano_c.shape[0]
+    d = job.stage_dir(INDEX)
+    symmetric = bool(params.get("mono_symmetric", True))
+    scale_l = +0.5 if symmetric else 0.0
+    scale_r = -0.5 if symmetric else -1.0
+
+    ctx.progress(0.1, "L 전방 워핑")
+    taps = int(params.get("splat_taps", 2))
+    if symmetric:
+        warped_l, covered_l = warp.forward_warp(pano_c, disp, taps=taps, scale=scale_l)
+    else:
+        warped_l, covered_l = pano_c.copy(), np.ones((size, size), dtype=bool)
+    ctx.progress(0.4, "R 전방 워핑")
+    warped_r, covered_r = warp.forward_warp(pano_c, disp, taps=taps, scale=scale_r)
+    holes_l = warp.hole_mask(covered_l)
+    holes_r = warp.hole_mask(covered_r)
+    imageio.write_image(d / "hole_mask_L.png", holes_l)
+    imageio.write_image(d / "hole_mask_R.png", holes_r)
+    ctx.log(f"hole L {float((holes_l > 0).mean()) * 100:.2f}% R {float((holes_r > 0).mean()) * 100:.2f}%")
+
+    ctx.progress(0.7, "hole 채우기")
+    p3 = job.params.get("stage_03_outpaint", {})
+    fill_params = {**p3, **params}
+    inpainter = get_inpainter(params.get("inpainter", "opencv"), job.model_params())
+    inpainter.ctx = ctx
+    with inpainter:
+        filled_l = _fill_holes(warped_l, holes_l, int(params.get("hole_px", 400)), inpainter, fill_params, ctx)
+        filled_r = _fill_holes(warped_r, holes_r, int(params.get("hole_px", 400)), inpainter, fill_params, ctx)
+
+    pano_l_rgba = np.dstack([filled_l, np.full((size, size), 255, np.uint8)])
+    pano_r_rgba = np.dstack([filled_r, np.full((size, size), 255, np.uint8)])
+    imageio.write_image(d / "pano_L.png", pano_l_rgba)
+    imageio.write_image(d / "pano_R.png", pano_r_rgba)
+    ana = np.dstack([filled_l[..., 0], filled_r[..., 1], filled_r[..., 2]])
+    imageio.write_image(d / "anaglyph.png", ana)
+    return {
+        "model": inpainter.info().as_dict(),
+        "mode": "mono",
+        "symmetric": symmetric,
+        "hole_fraction_L": float((holes_l > 0).mean()),
+        "hole_fraction_R": float((holes_r > 0).mean()),
+    }
+
+
 def run(job, params: dict, ctx) -> dict:
+    if job.input_mode == "mono":
+        return _run_mono(job, params, ctx)
+
     from vr180.models.registry import get_inpainter
 
     pano_l = imageio.read_rgba(job.path(3, "pano_L.png"))[..., :3]

@@ -60,10 +60,11 @@ def load(job_id):
             p = td / f"{n}_{suf}.png"
             if p.exists():
                 gallery.append((imageio.downscale_for_preview(imageio.read_rgb(p), 512), f"{n} {suf}"))
+    pano_name = "pano_C.png" if job.input_mode == "mono" else "pano_L.png"
     return vals + [
         gr.update(choices=tile_names(job_id), value=[]),
         gallery,
-        C.preview(job.path(3, "pano_L.png"), 2048),
+        C.preview(job.path(3, pano_name), 2048),
     ]
 
 
@@ -164,7 +165,7 @@ def build(shared):
             with gr.Row(elem_classes=["vr180-actions"]):
                 upload_btn = gr.Button("📥 불러오기")
         gallery = gr.Gallery(label="타일 (in / out)", columns=4, height=360)
-        pano = gr.Image(label="pano_L", type="numpy", interactive=False)
+        pano = gr.Image(label="pano (sbs: pano_L, mono: pano_C)", type="numpy", interactive=False)
         comps = [inpainter, prompt, neg, seed, steps, guidance, tile_fov, feather, tile_res]
         outputs = comps + [only, gallery, pano]
 
@@ -222,11 +223,12 @@ def build(shared):
             job = C.get_job(job_id)
             if job is None or f is None:
                 raise gr.Error("Job 과 파일이 필요합니다")
-            dst = job.path(3, "pano_L.png")
+            name = "pano_C.png" if job.input_mode == "mono" else "pano_L.png"
+            dst = job.path(3, name)
             dst.parent.mkdir(parents=True, exist_ok=True)
             img = imageio.read_rgba(f)
             if img.shape[0] != img.shape[1]:
-                raise gr.Error("pano_L 은 정사각이어야 합니다")
+                raise gr.Error(f"{name} 은 정사각이어야 합니다")
             shutil.copy2(f, dst)
             return f"덮어씀: {dst} — Stage 5 부터 재실행하면 반영됩니다", C.status_md(job_id)
 

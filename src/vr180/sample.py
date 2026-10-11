@@ -97,3 +97,13 @@ def make_sbs(
     left = _render(width_per_eye, height, hfov_deg, -baseline_m / 2, seed)
     right = _render(width_per_eye, height, hfov_deg, +baseline_m / 2, seed)
     return np.concatenate([left, right], axis=1)
+
+
+def make_mono(
+    width: int = 1920,
+    height: int = 1080,
+    hfov_deg: float = 80.0,
+    seed: int = 0,
+) -> np.ndarray:
+    """mono 모드용: 가운데 카메라 한 대. make_sbs 의 왼눈·오른눈 평균(=중앙) 뷰."""
+    return _render(width, height, hfov_deg, 0.0, seed)

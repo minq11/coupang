@@ -17,6 +17,8 @@ USES_MODELS = True
 
 
 def inputs(job):
+    if job.input_mode == "mono":
+        return []  # mono 모드: 사용 안 함
     return [
         job.path(0, "L.png"),
         job.path(0, "R.png"),
@@ -26,6 +28,8 @@ def inputs(job):
 
 
 def outputs(job):
+    if job.input_mode == "mono":
+        return []  # mono 모드에서는 Stage 4 건너뜀 (Job.is_skipped 가 감지)
     d = job.stage_dir(INDEX)
     return [
         d / "disp_center.npy",

@@ -31,7 +31,14 @@ def build() -> gr.Blocks:
         # ───── 상단: 액션 바
         with gr.Row():
             with gr.Column(scale=3):
-                upload = gr.File(label="입력 3D SBS 이미지 (JPG/PNG)", file_types=["image"])
+                upload = gr.File(label="입력 이미지 (JPG/PNG)", file_types=["image"])
+                input_mode_radio = gr.Radio(
+                    choices=[("📷 2D 사진 (mono)", "mono"), ("👓 3D SBS (스테레오)", "sbs")],
+                    value="mono",
+                    label="입력 모드",
+                    info="mono: 2D 사진 1장 → 깊이 추정으로 입체화. sbs: 좌/우가 붙은 스테레오 입력.",
+                    elem_classes=["vr180-tip"],
+                )
                 new_btn = gr.Button("➕ 새 Job 만들기", variant="primary")
             with gr.Column(scale=2):
                 open_btn = gr.Button("📂 기존 Job 열기", size="lg")
@@ -121,8 +128,8 @@ def build() -> gr.Blocks:
                 vals += fn(jid)
             return vals
 
-        def do_new(f):
-            j, _, md = C.create_job(f, None)  # 새 Job id 자동
+        def do_new(f, mode):
+            j, _, md = C.create_job(f, None, input_mode=mode)
             return j, md, C.input_preview(j)
 
         def do_open_popup():
@@ -144,7 +151,7 @@ def build() -> gr.Blocks:
             return jid, C.status_md(jid), gr.update(visible=False), C.input_preview(jid)
 
         new_evt = new_btn.click(
-            do_new, [upload], [job_id, status, input_thumb]
+            do_new, [upload, input_mode_radio], [job_id, status, input_thumb]
         ).then(load_all, [job_id], all_outputs)
 
         pick_evt = job_gallery.select(

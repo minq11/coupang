@@ -16,12 +16,20 @@ def load(job_id):
     job = C.get_job(job_id)
     if job is None:
         return [4096, "lanczos", None, None, None]
-    lp, rp = job.path(2, "L_equi.png"), job.path(2, "R_equi.png")
-    slider = (
-        (C.preview(lp, 2048, checker=True), C.preview(rp, 2048, checker=True))
-        if lp.exists() and rp.exists()
-        else None
-    )
+    if job.input_mode == "mono":
+        cp = job.path(2, "C_equi.png")
+        slider = (
+            (C.preview(cp, 2048, checker=True), C.preview(cp, 2048, checker=True))
+            if cp.exists()
+            else None
+        )
+    else:
+        lp, rp = job.path(2, "L_equi.png"), job.path(2, "R_equi.png")
+        slider = (
+            (C.preview(lp, 2048, checker=True), C.preview(rp, 2048, checker=True))
+            if lp.exists() and rp.exists()
+            else None
+        )
     return [
         int(C.get_param(job_id, STAGE, "size", 4096)),
         C.get_param(job_id, STAGE, "interpolation", "lanczos"),

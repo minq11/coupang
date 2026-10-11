@@ -52,8 +52,9 @@ def cmd_run(a) -> int:
             job_id=a.job_id,
             config_path=Path(a.config) if a.config else None,
             params_override=override,
+            input_mode=a.mode,
         )
-        print(f"Job 생성: {job.id} → {job.dir}")
+        print(f"Job 생성: {job.id} → {job.dir}  mode={job.input_mode}")
     ctx = RunContext()
     to = a.to_stage if a.to_stage is not None else len(stages()) - 1
     res = job.run(from_stage=a.from_stage, to_stage=to, ctx=ctx, force_from=not a.no_force)
@@ -90,12 +91,17 @@ def cmd_gui(a) -> int:
 
 
 def cmd_make_sample(a) -> int:
-    from vr180.sample import make_sbs
+    from vr180.sample import make_mono, make_sbs
     from vr180.util import imageio
 
-    img = make_sbs(a.width, a.height, a.hfov, a.baseline, a.seed)
+    if a.mono:
+        img = make_mono(a.width, a.height, a.hfov, a.seed)
+        label = "mono"
+    else:
+        img = make_sbs(a.width, a.height, a.hfov, a.baseline, a.seed)
+        label = "sbs"
     imageio.write_image(a.output, img)
-    print(f"저장: {a.output} ({img.shape[1]}x{img.shape[0]}, hfov {a.hfov}°)")
+    print(f"저장: {a.output} ({img.shape[1]}x{img.shape[0]}, {label}, hfov {a.hfov}°)")
     return 0
 
 
@@ -117,10 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="파이프라인 실행")
-    r.add_argument("--input", "-i", help="입력 SBS 이미지")
+    r.add_argument("--input", "-i", help="입력 이미지 (mono = 2D 사진, sbs = 스테레오)")
     r.add_argument("--job", "-j", help="기존 Job id (또는 폴더)")
     r.add_argument("--job-id", help="새 Job 의 id 지정")
     r.add_argument("--config", "-c", help="기본 파라미터 yaml (기본 configs/default.yaml)")
+    r.add_argument(
+        "--mode",
+        choices=["mono", "sbs"],
+        default=None,
+        help="입력 모드. 생략하면 config/_job.input_mode 기본값 (mono).",
+    )
     r.add_argument("--from-stage", type=int, default=0)
     r.add_argument("--to-stage", type=int, default=None)
     r.add_argument("--no-force", action="store_true", help="from-stage 도 캐시가 유효하면 건너뜀")
@@ -139,13 +151,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--share", action="store_true")
     g.set_defaults(fn=cmd_gui)
 
-    m = sub.add_parser("make-sample", help="합성 SBS 테스트 이미지 생성")
+    m = sub.add_parser("make-sample", help="합성 SBS/mono 테스트 이미지 생성")
     m.add_argument("output")
-    m.add_argument("--width", type=int, default=1920, help="눈당 폭")
+    m.add_argument("--width", type=int, default=1920, help="(sbs) 눈당 폭 / (mono) 전체 폭")
     m.add_argument("--height", type=int, default=1080)
     m.add_argument("--hfov", type=float, default=80.0)
-    m.add_argument("--baseline", type=float, default=0.065)
+    m.add_argument("--baseline", type=float, default=0.065, help="(sbs 전용) 눈 간격 m")
     m.add_argument("--seed", type=int, default=0)
+    m.add_argument("--mono", action="store_true", help="SBS 대신 가운데 카메라 1장만 생성")
     m.set_defaults(fn=cmd_make_sample)
 
     f = sub.add_parser("fetch-models", help="모델 가중치 내려받기 (models/ 아래)")

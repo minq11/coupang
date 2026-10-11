@@ -83,11 +83,12 @@ class _StreamTee(io.TextIOBase):
         except Exception:
             return False
 
-STATUS_ICON = {"done": "✅", "stale": "⚠️", "missing": "⬜"}
+STATUS_ICON = {"done": "✅", "stale": "⚠️", "missing": "⬜", "skipped": "➖"}
 STATUS_STYLE = {
     "done": "background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:6px;font-weight:600;border:1px solid #10b981",
     "stale": "background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:6px;border:1px solid #f59e0b",
     "missing": "background:#f3f4f6;color:#6b7280;padding:3px 8px;border-radius:6px;border:1px solid #d1d5db",
+    "skipped": "background:#e5e7eb;color:#4b5563;padding:3px 8px;border-radius:6px;border:1px dashed #9ca3af;font-style:italic",
 }
 _running: dict[str, RunContext] = {}
 
@@ -267,17 +268,18 @@ def status_md(job_id: str | None) -> str:
         cells.append(
             f'<span style="{STATUS_STYLE[s]};margin-right:4px">{STATUS_ICON[s]} {i} {st.NAME}</span>'
         )
+    mode_label = {"mono": "📷 mono (2D)", "sbs": "👓 sbs (3D)"}.get(job.input_mode, job.input_mode)
     return (
-        f"**Job** `{job.id}` &nbsp;&nbsp; "
+        f"**Job** `{job.id}` &nbsp;·&nbsp; **{mode_label}** &nbsp;&nbsp; "
         + "".join(cells)
-        + '  \n<span style="color:#6b7280;font-size:11px">✅ 완료 · ⚠️ stale (파라미터 바뀜) · ⬜ 없음</span>'
+        + '  \n<span style="color:#6b7280;font-size:11px">✅ 완료 · ⚠️ stale (파라미터 바뀜) · ⬜ 없음 · ➖ 모드에서 건너뜀</span>'
     )
 
 
-def create_job(file_path: str | None, job_id: str | None) -> tuple[str, Any, str]:
+def create_job(file_path: str | None, job_id: str | None, input_mode: str | None = None) -> tuple[str, Any, str]:
     if not file_path:
-        raise gr.Error("입력 SBS 이미지를 먼저 올리세요")
-    job = Job.create(file_path, job_id=(job_id or None))
+        raise gr.Error("입력 이미지를 먼저 올리세요")
+    job = Job.create(file_path, job_id=(job_id or None), input_mode=input_mode)
     return job.id, gr.update(choices=job_choices(), value=job.id), status_md(job.id)
 
 
