@@ -21,6 +21,8 @@ stage_02_reproj:
   size: 4096              # 눈당 S×S half-equirect 캔버스
   interpolation: lanczos  # lanczos | cubic | linear | nearest
   preview_only_background: black   # Quest 미리보기에서 원본 밖 채울 색
+  pitch_offset_deg: 0.0   # VR 적도(=뷰어 정면) 를 입력 사진의 어디로 맞출지. + = 위쪽(얼굴 쪽).
+                          #                            전신 세로샷 → 얼굴에 맞추려면 +20~+30 쯤.
   # 생성 범위 (타원): 정면에서 몇 도까지 "제대로" 만들지. 바깥은 페이드로 어둡게.
   # 기본은 "원본 화각 + 여유". 80° 16:9 사진이면 자동으로 ~120×100 이 됨.
   extent_margin_h_deg: 20       # 수평 여유 (한쪽 기준). extent_h_deg 가 null 일 때만 사용 (hfov + 2·margin).

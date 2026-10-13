@@ -506,9 +506,54 @@ def run_pipeline(
 
 
 # 상단 hfov 슬라이더 레인지. 자동 추정 결과를 반영할 때 반올림/클램프 기준.
-HFOV_MIN = 40.0
+HFOV_MIN = 20.0
 HFOV_MAX = 120.0
 HFOV_STEP = 0.5
+
+
+def draw_pitch_guide(rgb, hfov_deg: float, pitch_deg: float, max_side: int = 640):
+    """입력 썸네일 위에 노란 가로선 1개 — '현재 pitch 값이 가리키는 세로 위치'.
+
+    선을 얼굴에 걸치면 그 pitch 가 'VR 적도=얼굴'을 만드는 값. 수식:
+      focal_px = w / (2·tan(hfov/2));   row = h/2 − focal_px · tan(pitch_rad)
+    """
+    import math
+
+    import cv2
+
+    if rgb is None:
+        return None
+    img = imageio.downscale_for_preview(rgb, max_side).copy()
+    h, w = img.shape[:2]
+    f_px = w / (2.0 * math.tan(math.radians(float(hfov_deg)) / 2.0))
+    row = int(round(h / 2.0 - f_px * math.tan(math.radians(float(pitch_deg)))))
+    row = max(0, min(h - 1, row))
+    cv2.line(img, (0, row), (w - 1, row), (255, 220, 0), 2)
+    cv2.putText(
+        img,
+        f"pitch {pitch_deg:+.1f}°  (hfov {hfov_deg:g}°)",
+        (10, max(18, row - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 220, 0),
+        2,
+        cv2.LINE_AA,
+    )
+    return img
+
+
+def input_preview_for_guide(job_id: str | None, max_side: int = 640):
+    """Job 의 입력 raw 이미지(sbs 는 좌반) 를 downsample 해서 돌려준다. 가늠자 재렌더용 State."""
+    job = get_job(job_id)
+    if job is None:
+        return None
+    try:
+        raw = imageio.read_rgba(job.input_path)[..., :3]
+    except FileNotFoundError:
+        return None
+    if job.input_mode == "sbs":
+        raw = raw[:, : raw.shape[1] // 2]
+    return imageio.downscale_for_preview(raw, max_side)
 
 
 def snap_hfov(hfov: float) -> float:

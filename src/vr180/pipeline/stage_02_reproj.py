@@ -78,12 +78,14 @@ def run(job, params: dict, ctx) -> dict:
     d = job.stage_dir(INDEX)
     bg = params.get("preview_only_background", "black")
 
+    pitch = math.radians(float(params.get("pitch_offset_deg", 0.0)))
+
     if job.input_mode == "mono":
         center = imageio.read_rgb(job.path(0, "C.png"))
         h, w = center.shape[:2]
         hfov = math.radians(float(cam["hfov_deg"]))
         ctx.progress(0.2, "remap 테이블")
-        mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov)
+        mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch)
         ctx.progress(0.5, "C 재투영")
         c_equi = reproject.remap_to_equi(center, mx, my, valid, interp)
         imageio.write_image(d / "C_equi.png", c_equi)
@@ -102,7 +104,7 @@ def run(job, params: dict, ctx) -> dict:
     h, w = left.shape[:2]
     hfov = math.radians(float(cam["hfov_deg"]))
     ctx.progress(0.1, "remap 테이블")
-    mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov)
+    mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch)
     ctx.progress(0.3, "L 재투영")
     l_equi = reproject.remap_to_equi(left, mx, my, valid, interp)
     ctx.progress(0.6, "R 재투영")

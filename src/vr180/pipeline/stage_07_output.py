@@ -38,6 +38,7 @@ def option_tag(job: "Job") -> str:
     s5 = p.get("stage_05_depth", {})
     parts = [
         f"h-{float(s1.get('hfov_deg', 80.0)):g}",
+        f"p-{float(s2.get('pitch_offset_deg', 0.0)):g}",
         f"s-{int(s2.get('size', 4096))}",
         f"e-{float(s2.get('extent_h_deg', 180.0)):g}x{float(s2.get('extent_v_deg', 180.0)):g}",
         f"f-{float(s2.get('extent_fade_deg', 10.0)):g}",

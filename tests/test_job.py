@@ -18,7 +18,8 @@ def test_end_to_end_and_cache(work_dir, sample_sbs, small_params):
     res = job.run(ctx=_ctx())
     assert res == ["ran"] * len(stages())
     assert job.all_status() == ["done"] * len(stages())
-    out = job.path(7, "output_VR180_SBS_180_3dh.png")
+    from vr180.pipeline.stage_07_output import output_basename
+    out = job.path(7, f"{output_basename(job)}.png")
     img = imageio.read_rgb(out)
     assert img.shape == (256, 512, 3)
     jpg = out.with_suffix(".jpg").read_bytes()
@@ -62,7 +63,8 @@ def test_manual_edit_is_used_downstream(work_dir, sample_sbs, small_params):
     valid = imageio.read_mask(job.path(2, "valid_mask.png")) > 127
     outside = pano_r[~valid]
     assert np.mean(outside[:, 0]) > 200 and np.mean(outside[:, 1]) < 40
-    final = imageio.read_rgb(job.path(7, "output_VR180_SBS_180_3dh.png"))
+    from vr180.pipeline.stage_07_output import output_basename
+    final = imageio.read_rgb(job.path(7, f"{output_basename(job)}.png"))
     assert final[0, 0, 0] == 255
 
 
@@ -83,7 +85,8 @@ def test_mono_end_to_end_skips_stage4(work_dir, sample_mono, small_params_mono):
     for i in (0, 1, 2, 3, 5, 6, 7):
         assert st[i] == "done", f"stage {i} expected 'done', got {st[i]!r}"
     # 최종 출력 존재 + 크기
-    out = job.path(7, "output_VR180_SBS_180_3dh.png")
+    from vr180.pipeline.stage_07_output import output_basename
+    out = job.path(7, f"{output_basename(job)}.png")
     img = imageio.read_rgb(out)
     assert img.shape == (256, 512, 3)
     # Stage 0 는 C.png 하나만 생성

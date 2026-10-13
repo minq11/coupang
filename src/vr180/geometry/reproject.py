@@ -21,14 +21,18 @@ INTERP = {
 
 
 def pinhole_to_equi_maps(
-    size: int, width: int, height: int, hfov_rad: float
+    size: int, width: int, height: int, hfov_rad: float, pitch_rad: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """equirect 캔버스의 각 픽셀이 핀홀 이미지의 어느 좌표를 샘플링하는지.
+
+    pitch_rad > 0 이면 equirect 적도(φ=0) 가 핀홀 이미지의 윗쪽(= 얼굴 쪽) 을 가리키게
+    된다. 수식은 '샘플링 각도 φ 에 pitch_rad 를 더한 뒤 핀홀 투영': φ'= φ + pitch_rad.
+    equirect (0,0) → 핀홀의 angles_to_dir(0, pitch_rad) → py = cy − f·tan(pitch_rad).
 
     반환: map_x, map_y (S×S float32), valid (S×S bool).
     """
     theta, phi = sphere.equi_angle_grid(size)
-    d = sphere.angles_to_dir(theta, phi)
+    d = sphere.angles_to_dir(theta, phi + float(pitch_rad))
     px, py, inside = sphere.dir_to_pinhole(d, width, height, hfov_rad)
     map_x = np.where(inside, px, -10.0).astype(np.float32)
     map_y = np.where(inside, py, -10.0).astype(np.float32)

@@ -26,9 +26,10 @@ RUN_ALL_LABEL = "▶ 한번에 진행 (Stage 0 → 7)"
 
 
 def _load_main(job_id):
-    """상단 '주요 옵션' 9개 위젯의 값을 Job 파라미터에서 읽어 돌려준다 (순서: main_opts 와 동일)."""
+    """상단 '주요 옵션' 10개 위젯의 값을 Job 파라미터에서 읽어 돌려준다 (순서: main_opts 와 동일)."""
     return [
         float(C.get_param(job_id, 1, "hfov_deg", 60.0)),
+        float(C.get_param(job_id, 2, "pitch_offset_deg", 0.0)),
         int(C.get_param(job_id, 2, "size", 4096)),
         float(C.get_param(job_id, 2, "extent_h_deg", 180.0)),
         float(C.get_param(job_id, 2, "extent_v_deg", 180.0)),
@@ -44,6 +45,7 @@ def build() -> gr.Blocks:
     with gr.Blocks(title=f"vr180 {__version__}", theme=gr.themes.Soft(), css=C.CSS) as demo:
         gr.Markdown("## 3D SBS → VR180 SBS 변환 파이프라인")
         job_id = gr.State(None)
+        raw_preview = gr.State(None)  # 가늠자 재렌더용: 업로드 때 저장한 raw(sbs 는 좌반) 다운샘플
 
         # ───── 상단: 액션 바 (사진 업로드 → 자동으로 작업 폴더 생성 + 화각 자동 추정)
         with gr.Row():
@@ -89,7 +91,13 @@ def build() -> gr.Blocks:
                 hfov = gr.Slider(
                     C.HFOV_MIN, C.HFOV_MAX, value=60, step=C.HFOV_STEP,
                     label="hfov_deg (수평 화각)",
-                    info="업로드 때 자동 추정된 값. 필요하면 수동 조정 가능. 광각 액션캠은 100°+, 일반 사진 70~90°.",
+                    info="업로드 때 자동 추정된 값. 필요하면 수동 조정. 광각 액션캠은 100°+, 일반 사진 70~90°.",
+                    elem_classes=["vr180-tip"],
+                )
+                pitch = gr.Slider(
+                    -60, 60, value=0, step=0.5,
+                    label="pitch_offset_deg (얼굴 올리기)",
+                    info="+ = VR 적도를 사진 위쪽(얼굴 방향) 으로. 썸네일의 노란 가로선이 얼굴에 걸치는 값이 정답. 전신 세로샷 보통 +20~+30°.",
                     elem_classes=["vr180-tip"],
                 )
                 size = gr.Dropdown(
@@ -144,7 +152,7 @@ def build() -> gr.Blocks:
                 elem_classes=["vr180-tip"],
                 visible=False,
             )
-        main_opts = [hfov, size, ext_h, ext_v, fade, estimator, depth_strength, inpainter, prompt]
+        main_opts = [hfov, pitch, size, ext_h, ext_v, fade, estimator, depth_strength, inpainter, prompt]
 
         # ───── 최종 출력 (한번에 진행 완료 시 Stage 7 산출물이 여기 뜸)
         with gr.Group(elem_classes=["vr180-final"]):
@@ -223,9 +231,10 @@ def build() -> gr.Blocks:
             return snapped, ""
 
         def do_upload(f, mode):
-            """사진 업로드 → Job 자동 생성 + 화각 자동 추정. 실패 시 60° 로 폴백."""
+            """사진 업로드 → Job 자동 생성 + 화각 자동 추정. 실패 시 60° 로 폴백.
+            raw_preview State 도 세팅해 pitch 슬라이더 가늠자 재렌더용으로 보관."""
             if not f:
-                return None, C.status_md(None), None, gr.update(), ""
+                return None, C.status_md(None), None, None, gr.update(), ""
             j, _, md = C.create_job(f, None, input_mode=mode)
             try:
                 raw, conf, name = C.estimate_hfov_from_job(j)
@@ -234,21 +243,32 @@ def build() -> gr.Blocks:
             except Exception as e:  # noqa: BLE001  (geocalib 미설치/수렴 실패 등 모두 60 폴백)
                 hfov_v = 60.0
                 log = f"⚠️ 화각 자동 추정 실패 ({type(e).__name__}: {e}) — 디폴트 60° 적용"
-            # params 에도 즉시 반영 → load_all 재조회 시 일관성 유지. auto_estimate 는 끈 상태로 저장
-            # (파이프라인에서 GeoCalib 를 다시 돌리지 않고 이 hfov 값을 그대로 쓰도록).
+            # params 에도 즉시 반영 → load_all 재조회 시 일관성 유지. auto_estimate 는 끈 상태로 저장.
             job = C.get_job(j)
             if job is not None:
                 job.set_param(1, "hfov_deg", float(hfov_v))
                 job.set_param(1, "auto_estimate", False)
                 job.save_params()
-            return j, md, C.input_preview(j), gr.update(value=hfov_v), log
+            # 가늠자 포함 썸네일. pitch 는 업로드 직후 0 (사진 중앙 = VR 적도).
+            preview = C.input_preview_for_guide(j)
+            thumb = C.draw_pitch_guide(preview, hfov_v, 0.0)
+            return j, md, thumb, preview, gr.update(value=hfov_v), log
 
         upload_evt = upload.upload(
-            do_upload, [upload, input_mode_radio], [job_id, status, input_thumb, hfov, log_brief]
+            do_upload,
+            [upload, input_mode_radio],
+            [job_id, status, input_thumb, raw_preview, hfov, log_brief],
         ).then(load_all, [job_id], all_outputs)
 
         for fn, ins, outs in shared["after_load"]:
             upload_evt.then(fn, ins, outs)
+
+        # 가늠자 실시간 재렌더: hfov · pitch 가 바뀌면 raw_preview 로부터 input_thumb 다시 그림
+        def redraw_guide(preview, hfov_v, pitch_v):
+            return C.draw_pitch_guide(preview, hfov_v, pitch_v)
+
+        hfov.change(redraw_guide, [raw_preview, hfov, pitch], [input_thumb])
+        pitch.change(redraw_guide, [raw_preview, hfov, pitch], [input_thumb])
 
         cancel_btn.click(C.cancel_run, [job_id], [log_brief])
 
@@ -265,7 +285,7 @@ def build() -> gr.Blocks:
             main_vals = vals[:N_MAIN]
             tab_vals = vals[N_MAIN:]
             (
-                hfov_v, size_v, ext_h_v, ext_v_v, fade_v,
+                hfov_v, pitch_v, size_v, ext_h_v, ext_v_v, fade_v,
                 estimator_v, depth_s_v, inpainter_v, prompt_v,
             ) = main_vals
             param_updates: dict[int, dict] = {}
@@ -279,6 +299,7 @@ def build() -> gr.Blocks:
             param_updates.setdefault(2, {}).update(
                 {
                     "size": int(size_v),
+                    "pitch_offset_deg": float(pitch_v),
                     "extent_h_deg": float(ext_h_v),
                     "extent_v_deg": float(ext_v_v),
                     "extent_fade_deg": float(fade_v),
