@@ -114,6 +114,7 @@ def cmd_fetch_models(a) -> int:
         flux=a.flux or a.all,
         raft_stereo=a.raft_stereo or a.all,
         raft_flow=a.raft_flow or a.all,
+        vda=a.vda or a.all,
     )
 
 
@@ -196,6 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--flux", action="store_true")
     f.add_argument("--raft-stereo", action="store_true")
     f.add_argument("--raft-flow", action="store_true")
+    f.add_argument("--vda", action="store_true", help="Video Depth Anything 저장소+가중치 (2D 영상 → mono 경로)")
     f.add_argument("--all", action="store_true")
     f.set_defaults(fn=cmd_fetch_models)
 

@@ -108,4 +108,10 @@ models:
   da2_base_id: depth-anything/Depth-Anything-V2-Base-hf
   da2_small_id: depth-anything/Depth-Anything-V2-Small-hf
   raft_stereo_repo: https://github.com/princeton-vl/RAFT-Stereo.git
+  # Video Depth Anything (영상 전용 시간축 깊이, iw3 없이 2D 영상 → VR180 가능하게 함)
+  vda_repo: https://github.com/DepthAnything/Video-Depth-Anything.git
+  vda_small_hf: depth-anything/Video-Depth-Anything-Small
+  vda_large_hf: depth-anything/Video-Depth-Anything-Large
+  vda_small_file: video_depth_anything_vits.pth
+  vda_large_file: video_depth_anything_vitl.pth
   device: auto            # auto | cuda | cpu

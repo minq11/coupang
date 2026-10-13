@@ -38,6 +38,8 @@ nf4 = ["bitsandbytes>=0.43.2"]
 geocalib = ["geocalib @ git+https://github.com/cvg/GeoCalib.git"]
 # Stage 0 특징점 매칭 대안
 lightglue = ["lightglue @ git+https://github.com/cvg/LightGlue.git"]
+# Video Depth Anything (영상 mono 깊이, iw3 없이 2D 영상 → VR180)
+vda = ["einops>=0.7", "easydict>=1.9"]
 
 [dependency-groups]
 dev = [

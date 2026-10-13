@@ -1,12 +1,15 @@
 """Video Depth Anything (VDA) — 영상 전용 시간축 깊이. 32프레임 묶음을 겹쳐 추정해 프레임 간 떨림을 없앤다.
 
-VDA 저장소: https://github.com/DepthAnything/Video-Depth-Anything (설치는 third_party/ 아래).
+VDA 저장소: https://github.com/DepthAnything/Video-Depth-Anything.
+설치: `uv run vr180 fetch-models --vda` → third_party/Video-Depth-Anything + models/vda/*.pth.
 없으면 DA2 (프레임별) 로 폴백 — 떨림이 생기지만 pipeline 자체는 돈다.
 
 인터페이스
 ----------
     class VideoDepthEstimator:
         def inverse_depth_sequence(frames: list[np.ndarray]) -> list[np.ndarray]
+
+VDA 출력은 'disparity-like' (상대 inverse depth, 클수록 가까움) → 우리 interface 와 그대로 일치.
 """
 
 from __future__ import annotations
@@ -16,8 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
-from vr180.models.base import ModelInfo, resolve_device
 from vr180 import paths
+from vr180.models.base import ModelInfo, resolve_device
 
 
 class VideoDepthEstimator:
@@ -36,61 +39,116 @@ class VideoDepthEstimator:
         return False
 
 
-def _vda_available() -> bool:
-    """third_party/Video-Depth-Anything 저장소가 있고 import 가능한가."""
-    root = paths.third_party_dir() / "Video-Depth-Anything"
-    if not root.exists():
-        return False
-    try:
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
-        # 모듈 이름은 VDA 저장소 레이아웃에 따라 다름. 가능한 경로를 시도.
-        import importlib
+# ----------------------------------------------------------------------------- VDA 네이티브
+_VDA_MODEL_CONFIGS = {
+    "small": {"encoder": "vits", "features": 64, "out_channels": [48, 96, 192, 384]},
+    "large": {"encoder": "vitl", "features": 256, "out_channels": [256, 512, 1024, 1024]},
+}
 
-        for name in ("video_depth_anything", "video_depth_anything_v2", "vda"):
-            try:
-                importlib.import_module(name)
-                return True
-            except Exception:
-                continue
-        return False
-    except Exception:
-        return False
+
+def _vda_repo_dir() -> Path:
+    return paths.third_party_dir() / "Video-Depth-Anything"
+
+
+def _vda_weights_path(variant: str) -> Path:
+    name = f"video_depth_anything_vits.pth" if variant == "small" else "video_depth_anything_vitl.pth"
+    return paths.models_dir() / "vda" / name
+
+
+def _vda_available() -> tuple[bool, str]:
+    """저장소·가중치 체크. (ok, 사유)."""
+    repo = _vda_repo_dir()
+    if not (repo / "video_depth_anything").exists():
+        return False, f"VDA 저장소 없음: {repo} (vr180 fetch-models --vda 로 clone)"
+    return True, ""
 
 
 class VDAEstimator(VideoDepthEstimator):
-    """VDA 네이티브 어댑터 — 저장소가 있을 때만 실제로 동작."""
+    """VDA 네이티브 어댑터. infer_video_depth 를 그대로 쓰고 내부 window 에 위임."""
 
     def __init__(self, model_cfg: dict, variant: str = "large", chunk: int = 32, overlap: int = 8):
         self.cfg = model_cfg
-        self.variant = variant
+        self.variant = variant  # 'small' | 'large'
         self.chunk = int(chunk)
         self.overlap = int(overlap)
         self.device = resolve_device(model_cfg.get("device", "auto"))
-        self._engine = None
+        self.model = None
 
     def info(self) -> ModelInfo:
         return ModelInfo(
             name=f"video_depth_anything_{self.variant}",
-            weights=f"vda:{self.variant}",
+            weights=str(_vda_weights_path(self.variant)),
             device=self.device,
             extra={"chunk": self.chunk, "overlap": self.overlap},
         )
 
-    def inverse_depth_sequence(self, frames: list[np.ndarray]) -> list[np.ndarray]:
-        if not _vda_available():
+    def _load(self) -> None:
+        import torch
+
+        ok, reason = _vda_available()
+        if not ok:
+            raise RuntimeError(reason)
+        wp = _vda_weights_path(self.variant)
+        if not wp.exists():
             raise RuntimeError(
-                "VDA 가 설치되지 않았습니다. third_party/Video-Depth-Anything 를 클론하고 "
-                "pip install -r requirements.txt 하세요. 지금은 DA2 폴백을 쓰세요."
+                f"VDA 가중치 없음: {wp} (vr180 fetch-models --vda 로 다운로드)"
             )
-        # 실제 네이티브 호출은 VDA 저장소의 공개 함수에 따라 다르다. 저장소가 안정화되면
-        # 여기에 chunked inference 를 구현한다. 1차 구현은 폴백 경로로 안전하게.
-        raise NotImplementedError(
-            "VDA 네이티브 추론은 저장소 레이아웃이 바뀌어서 아직 통합 중입니다. "
-            "fallback 'da2_video' 를 쓰세요."
-        )
+        repo = _vda_repo_dir()
+        if str(repo) not in sys.path:
+            sys.path.insert(0, str(repo))
+        from video_depth_anything.video_depth import VideoDepthAnything  # type: ignore
+
+        cfg = _VDA_MODEL_CONFIGS[self.variant]
+        self.model = VideoDepthAnything(**cfg)
+        state = torch.load(str(wp), map_location="cpu")
+        self.model.load_state_dict(state, strict=True)
+        self.model = self.model.to(self.device).eval()
+
+    def _unload(self) -> None:
+        self.model = None
+        from vr180.models.base import free_cuda
+        free_cuda()
+
+    def __enter__(self):
+        if self.model is None:
+            self._load()
+        return self
+
+    def __exit__(self, *exc):
+        self._unload()
+        return False
+
+    def inverse_depth_sequence(self, frames: list[np.ndarray]) -> list[np.ndarray]:
+        """frames: list of RGB uint8 (H,W,3). 반환: list of float32 inverse depth (H,W)."""
+        if self.model is None:
+            self._load()
+        if not frames:
+            return []
+        # VDA 는 (N,H,W,3) numpy 배열 또는 list 를 받고, 내부적으로 chunk/overlap window 를 돌림.
+        # input_size=518 가 공식 기본. fp32 는 메모리 넉넉하면 True 가 조금 더 안정적.
+        import torch
+
+        with torch.inference_mode():
+            # VDA 의 infer_video_depth 는 보통 (N,H,W) float32 depth 배열을 돌려준다.
+            # 저장소 레이아웃에 따라 (depths, fps) 튜플인 경우도 있어 분기.
+            arr = np.ascontiguousarray(np.stack(frames, axis=0))
+            result = self.model.infer_video_depth(
+                arr,
+                target_fps=-1,  # 재샘플 안 함 (우리 쪽에서 이미 frame 리스트)
+                input_size=518,
+                device=self.device,
+                fp32=False,
+            )
+            if isinstance(result, tuple):
+                depths = result[0]
+            else:
+                depths = result
+            depths_np = depths.detach().cpu().numpy() if hasattr(depths, "detach") else np.asarray(depths)
+        # VDA 는 'disparity-like' (크면 가까움) → 그대로 inverse depth. 음수 방지만.
+        return [np.ascontiguousarray(d.astype(np.float32)) for d in np.clip(depths_np, 0, None)]
 
 
+# ----------------------------------------------------------------------------- DA2 폴백
 class DA2FallbackEstimator(VideoDepthEstimator):
     """VDA 가 없을 때 폴백: DA2 를 프레임마다 호출. 떨림이 있지만 end-to-end 는 돈다."""
 
@@ -129,9 +187,11 @@ def get_video_depth_estimator(
         return None
     if name in ("vda_large", "vda_small"):
         variant = "large" if name == "vda_large" else "small"
-        if _vda_available():
+        ok, reason = _vda_available()
+        if ok and _vda_weights_path(variant).exists():
             return VDAEstimator(model_cfg, variant=variant, chunk=chunk, overlap=overlap)
-        # VDA 없으면 자동 폴백
+        # VDA 없으면 자동 폴백 (일회성 안내 로그만)
+        print(f"[vda] 폴백 → DA2: {reason or '가중치 없음'}")
         return DA2FallbackEstimator(model_cfg, variant=variant)
     if name in ("da2_video", "da2_video_large", "da2_video_small"):
         variant = "small" if name.endswith("small") else "large"
