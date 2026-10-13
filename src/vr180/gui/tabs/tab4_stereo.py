@@ -1,4 +1,4 @@
-"""탭 4 — 중앙 disparity: 컬러맵, 원본과 오버레이 슬라이더. 모델 선택, max disparity."""
+"""탭 4 — 중앙 disparity: 컬러맵, 원본과 오버레이. 고급: matcher, max disparity."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import gradio as gr
 from vr180.gui import common as C
 
 STAGE = 4
-RUN_LABEL = "▶ 실행 (Stage 4)"
 
 
 def load(job_id):
@@ -39,52 +38,29 @@ def load(job_id):
 
 def build(shared):
     with gr.Tab("4 중앙 disparity", id=STAGE):
-        with gr.Row():
-            matcher = gr.Dropdown(
-                ["sgbm", "raft_stereo", "raft_flow"],
-                value="raft_stereo",
-                label="stereo matcher",
-                info="sgbm=OpenCV, raft_stereo=RAFT-Stereo (품질↑), raft_flow=optical flow 변형.",
-                elem_classes=["vr180-tip"],
-            )
         with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
-            maxd = gr.Slider(
-                32,
-                1024,
-                value=256,
-                step=16,
-                label="max disparity (px)",
-                info="SGBM 탐색 범위 상한. 가까이 있는 물체가 많으면 늘려야 함. RAFT 는 영향 적음.",
-                elem_classes=["vr180-tip"],
-            )
-        with gr.Row(elem_classes=["vr180-actions"]):
-            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
+            with gr.Row():
+                matcher = gr.Dropdown(
+                    ["sgbm", "raft_stereo", "raft_flow"],
+                    value="raft_stereo",
+                    label="stereo matcher",
+                    info="sgbm=OpenCV, raft_stereo=RAFT-Stereo (품질↑), raft_flow=optical flow 변형.",
+                    elem_classes=["vr180-tip"],
+                )
+                maxd = gr.Slider(
+                    32, 1024, value=256, step=16,
+                    label="max disparity (px)",
+                    info="SGBM 탐색 범위 상한. 가까이 있는 물체가 많으면 늘려야 함. RAFT 는 영향 적음.",
+                    elem_classes=["vr180-tip"],
+                )
         slider = gr.ImageSlider(label="L_equi ↔ disparity (각도, equirect)", type="numpy", interactive=False)
         with gr.Row():
             px = gr.Image(label="disparity (px, 원근)", type="numpy", interactive=False)
             info = gr.Markdown()
         outputs = [matcher, maxd, slider, px, info]
 
-        def run(job_id, m, d):
-            yield from C.run_pipeline(job_id, STAGE, STAGE, {STAGE: {"matcher": m, "max_disparity": int(d)}})
-
-        shared["all_run_buttons"].append(run_btn)
-
-        def _wire():
-            others = [b for b in shared["all_run_buttons"] if b is not run_btn]
-            run_btn.click(
-                C.with_button_lock(run, RUN_LABEL, n_other=len(others)),
-                [shared["job_id"], matcher, maxd],
-                [
-                    run_btn,
-                    *others,
-                    shared["log"],
-                    shared["log_full"],
-                    shared["status"],
-                    shared["progress"],
-                    shared["stage_tabs"],
-                ],
-            ).then(load, [shared["job_id"]], outputs)
-
-        shared["after_build_wires"].append(_wire)
+        shared["param_bindings"].extend([
+            (matcher, STAGE, "matcher", str),
+            (maxd, STAGE, "max_disparity", lambda v: int(v)),
+        ])
     return load, outputs

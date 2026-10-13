@@ -505,6 +505,55 @@ def run_pipeline(
         raise gr.Error(f"{type(err[0]).__name__}: {err[0]}")
 
 
+# 상단 hfov 슬라이더 레인지. 자동 추정 결과를 반영할 때 반올림/클램프 기준.
+HFOV_MIN = 40.0
+HFOV_MAX = 120.0
+HFOV_STEP = 0.5
+
+
+def snap_hfov(hfov: float) -> float:
+    """hfov 값을 슬라이더 step 에 맞춰 반올림하고 [HFOV_MIN, HFOV_MAX] 로 클램프."""
+    v = round(float(hfov) / HFOV_STEP) * HFOV_STEP
+    return float(min(max(v, HFOV_MIN), HFOV_MAX))
+
+
+def estimate_hfov_from_job(job_id: str | None) -> tuple[float, float, str]:
+    """선택된 FOV estimator (기본 GeoCalib) 를 Job 입력 이미지에 돌려 (hfov_deg_raw, confidence, model) 반환.
+       Stage 0 산출물(C.png/L.png)이 있으면 그걸, 없으면 raw input (sbs 는 좌반) 을 쓴다.
+       반환값은 raw — 반올림/클램프는 호출측에서 snap_hfov 로. 추정 자체 실패 시 gr.Error."""
+    job = get_job(job_id)
+    if job is None:
+        raise gr.Error("Job 을 먼저 만들거나 여세요")
+    from vr180.models.registry import get_fov_estimator
+
+    name = job.stage_params(1).get("estimator") or "geocalib"
+    try:
+        est = get_fov_estimator(name, job.model_params())
+    except Exception as e:  # noqa: BLE001
+        raise gr.Error(f"FOV estimator '{name}' 로드 실패: {e}") from e
+    if est is None:
+        raise gr.Error(f"'{name}' 은 수동 모드 — 추정기가 아닙니다")
+    src = job.path(0, "C.png" if job.input_mode == "mono" else "L.png")
+    if src.exists():
+        img = imageio.read_rgb(src)
+    else:
+        raw = imageio.read_rgba(job.input_path)[..., :3]
+        img = raw[:, : raw.shape[1] // 2] if job.input_mode == "sbs" else raw
+    try:
+        with est:
+            hfov, conf = est.estimate_hfov(img)
+            model_name = est.info().name
+    except ModuleNotFoundError as e:
+        hint = {"geocalib": "uv sync --extra geocalib"}.get(name, f"'{name}' 선택 의존성 설치 필요")
+        raise gr.Error(f"'{name}' 패키지 미설치 — 터미널에서 `{hint}` 실행 후 GUI 재시작") from e
+    except Exception as e:  # noqa: BLE001
+        raise gr.Error(f"FOV 추정 실패: {e}") from e
+    # 극단적으로 비정상인 값만 거부 (model 자체가 수렴 실패한 경우). 슬라이더 범위 안으로 조이는 건 호출측.
+    if hfov is None or hfov <= 5 or hfov >= 175:
+        raise gr.Error(f"FOV 추정 결과가 비정상 (hfov={hfov}, conf={conf:.2f}) — 모델 수렴 실패")
+    return float(hfov), float(conf), model_name
+
+
 def cancel_run(job_id: str | None) -> str:
     ctx = _running.get(job_id or "")
     if ctx is None:

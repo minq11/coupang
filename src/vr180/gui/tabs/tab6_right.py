@@ -1,4 +1,5 @@
-"""탭 6 — Right 합성: pano_R, hole 마스크, L/R 토글, 애너글리프. hole_px, inpaint 모델."""
+"""탭 6 — Right 합성: pano_R, hole 마스크, L/R 토글, 애너글리프. 고급: hole_px, inpaint 모델.
+   (Stage 6 inpainter 는 큰 구멍 메우기 전용 — Stage 3 outpainter 와 다름.)"""
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ import gradio as gr
 from vr180.gui import common as C
 
 STAGE = 6
-RUN_LABEL = "▶ 실행 (Stage 6)"
 
 
 def load(job_id):
@@ -29,26 +29,22 @@ def load(job_id):
 
 def build(shared):
     with gr.Tab("6 Right 합성", id=STAGE):
-        with gr.Row():
-            inp = gr.Dropdown(
-                ["opencv", "sdxl", "flux"],
-                value="opencv",
-                label="큰 구멍 inpainter",
-                info="hole_px 초과 구멍을 메울 모델. opencv=빠른 Telea (기본), sdxl/flux=디테일 생성.",
-                elem_classes=["vr180-tip"],
-            )
         with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
-            hole = gr.Slider(
-                0,
-                5000,
-                value=400,
-                step=50,
-                label="hole_px (threshold)",
-                info="이 면적(px²) 이하 구멍은 Telea 로 빠르게, 초과는 inpaint 모델로. 작을수록 모델 호출↑.",
-                elem_classes=["vr180-tip"],
-            )
-        with gr.Row(elem_classes=["vr180-actions"]):
-            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
+            with gr.Row():
+                inp = gr.Dropdown(
+                    ["opencv", "sdxl", "flux"],
+                    value="opencv",
+                    label="큰 구멍 inpainter",
+                    info="hole_px 초과 구멍을 메울 모델. opencv=빠른 Telea (기본), sdxl/flux=디테일 생성. "
+                    "Stage 3 outpainter 와 별개.",
+                    elem_classes=["vr180-tip"],
+                )
+                hole = gr.Slider(
+                    0, 5000, value=400, step=50,
+                    label="hole_px (threshold)",
+                    info="이 면적(px²) 이하 구멍은 Telea 로 빠르게, 초과는 inpaint 모델로. 작을수록 모델 호출↑.",
+                    elem_classes=["vr180-tip"],
+                )
         toggle = gr.Radio(["L", "R"], value="L", label="L/R 토글 (번갈아 눌러 시차 방향 확인)")
         lr_view = gr.Image(label="pano (L/R)", type="numpy", interactive=False)
         l_hidden = gr.State(None)
@@ -60,33 +56,13 @@ def build(shared):
             )
         outputs = [hole, inp, l_hidden, r_hidden, holes, ana]
 
-        def run(job_id, h, i):
-            yield from C.run_pipeline(job_id, STAGE, STAGE, {STAGE: {"hole_px": int(h), "inpainter": i}})
-
         def show(which, l_img, r_img):
             return l_img if which == "L" else r_img
 
-        shared["all_run_buttons"].append(run_btn)
-
-        def _wire():
-            others = [b for b in shared["all_run_buttons"] if b is not run_btn]
-            run_btn.click(
-                C.with_button_lock(run, RUN_LABEL, n_other=len(others)),
-                [shared["job_id"], hole, inp],
-                [
-                    run_btn,
-                    *others,
-                    shared["log"],
-                    shared["log_full"],
-                    shared["status"],
-                    shared["progress"],
-                    shared["stage_tabs"],
-                ],
-            ).then(load, [shared["job_id"]], outputs).then(
-                show, [toggle, l_hidden, r_hidden], [lr_view]
-            )
-
-        shared["after_build_wires"].append(_wire)
+        shared["param_bindings"].extend([
+            (hole, STAGE, "hole_px", lambda v: int(v)),
+            (inp, STAGE, "inpainter", str),
+        ])
         toggle.change(show, [toggle, l_hidden, r_hidden], [lr_view])
         shared["after_load"].append((show, [toggle, l_hidden, r_hidden], [lr_view]))
     return load, outputs

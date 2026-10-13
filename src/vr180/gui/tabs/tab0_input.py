@@ -1,4 +1,4 @@
-"""탭 0 — 입력: L/R 원본, 수직 시차 히스토그램, 경고. 파라미터 swap_lr, rectify."""
+"""탭 0 — 입력: L/R 원본, 수직 시차 히스토그램, 경고. 고급(sbs 전용): swap_lr, rectify."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from vr180.gui import common as C
 from vr180.util import imageio
 
 STAGE = 0
-RUN_LABEL = "▶ 실행 (Stage 0)"
 
 
 def load(job_id):
@@ -21,11 +20,9 @@ def load(job_id):
     rep_p = job.path(0, "rectify_report.json")
     hist, warn = None, "_아직 실행 안 함_"
     if mode == "mono":
-        # mono: 수직 시차 측정이 없다. 안내만.
         if rep_p.exists():
             warn = "📷 **mono 모드** — 자르기·수직 보정 없음, 가운데 뷰 1장을 그대로 사용합니다."
         c = C.preview(job.path(0, "C.png"), 1024)
-        # L/R 두 슬롯 모두 C 를 보여 UX 를 단순히: "오른쪽 슬롯은 사용 안 함" 라벨 비주얼은 포기.
         return [
             False,
             False,
@@ -75,8 +72,6 @@ def build(shared):
                     info="L/R 특징점 매칭으로 수직 시차를 보정 (y 방향 평행이동). 세로 어긋남이 있을 때만 켠다.",
                     elem_classes=["vr180-tip"],
                 )
-        with gr.Row(elem_classes=["vr180-actions"]):
-            run_btn = gr.Button(RUN_LABEL, variant="primary", elem_classes=["vr180-run"])
         warn = gr.Markdown()
         with gr.Row():
             l_img = gr.Image(label="원본 (sbs: L, mono: 전체)", type="numpy", interactive=False)
@@ -85,28 +80,8 @@ def build(shared):
 
         outputs = [swap, rect, l_img, r_img, hist, warn, sbs_opts]
 
-        shared["all_run_buttons"].append(run_btn)
-
-        def run(job_id, swap_v, rect_v):
-            yield from C.run_pipeline(
-                job_id, STAGE, STAGE, {STAGE: {"swap_lr": bool(swap_v), "rectify": bool(rect_v)}}
-            )
-
-        def _wire():
-            others = [b for b in shared["all_run_buttons"] if b is not run_btn]
-            run_btn.click(
-                C.with_button_lock(run, RUN_LABEL, n_other=len(others)),
-                [shared["job_id"], swap, rect],
-                [
-                    run_btn,
-                    *others,
-                    shared["log"],
-                    shared["log_full"],
-                    shared["status"],
-                    shared["progress"],
-                    shared["stage_tabs"],
-                ],
-            ).then(load, [shared["job_id"]], outputs)
-
-        shared["after_build_wires"].append(_wire)
+        shared["param_bindings"].extend([
+            (swap, STAGE, "swap_lr", bool),
+            (rect, STAGE, "rectify", bool),
+        ])
     return load, outputs

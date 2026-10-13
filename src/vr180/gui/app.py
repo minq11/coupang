@@ -1,4 +1,5 @@
-"""Gradio 레이아웃. 상단: 입력 업로드 / Job 선택(팝업) / 썸네일 / 프리셋 / 취소 / 로그(간략/상세). 아래: Stage 탭."""
+"""Gradio 레이아웃. 상단: 입력 / Job / 썸네일 / 주요 옵션 7개 / 로그.
+   아래: Stage 0~7 탭은 접힌 Accordion 안 (미리보기·고급용). 실행은 상단 '한번에 진행' 하나로 통일."""
 
 from __future__ import annotations
 
@@ -21,38 +22,50 @@ from vr180.gui.tabs import (
 
 TABS = [tab0_input, tab1_fov, tab2_reproj, tab3_outpaint, tab4_stereo, tab5_depth, tab6_right, tab7_output]
 
+RUN_ALL_LABEL = "▶ 한번에 진행 (Stage 0 → 7)"
+
+
+def _load_main(job_id):
+    """상단 '주요 옵션' 9개 위젯의 값을 Job 파라미터에서 읽어 돌려준다 (순서: main_opts 와 동일)."""
+    return [
+        float(C.get_param(job_id, 1, "hfov_deg", 60.0)),
+        int(C.get_param(job_id, 2, "size", 4096)),
+        float(C.get_param(job_id, 2, "extent_h_deg", 180.0)),
+        float(C.get_param(job_id, 2, "extent_v_deg", 180.0)),
+        float(C.get_param(job_id, 2, "extent_fade_deg", 10.0)),
+        C.get_param(job_id, 5, "estimator", "da2_large"),
+        float(C.get_param(job_id, 5, "depth_strength", 0.02)),
+        C.get_param(job_id, 3, "inpainter", "opencv"),
+        C.get_param(job_id, 3, "prompt", ""),
+    ]
+
 
 def build() -> gr.Blocks:
     with gr.Blocks(title=f"vr180 {__version__}", theme=gr.themes.Soft(), css=C.CSS) as demo:
         gr.Markdown("## 3D SBS → VR180 SBS 변환 파이프라인")
         job_id = gr.State(None)
-        job_list_state = gr.State([])  # 팝업 갤러리 index → job_id 매핑
 
-        # ───── 상단: 액션 바
+        # ───── 상단: 액션 바 (사진 업로드 → 자동으로 작업 폴더 생성 + 화각 자동 추정)
         with gr.Row():
             with gr.Column(scale=3):
-                upload = gr.File(label="입력 이미지 (JPG/PNG)", file_types=["image"])
+                upload = gr.File(
+                    label="입력 이미지 (JPG/PNG) — 업로드하면 자동 시작",
+                    file_types=["image"],
+                )
                 input_mode_radio = gr.Radio(
                     choices=[("📷 2D 사진 (mono)", "mono"), ("👓 3D SBS (스테레오)", "sbs")],
                     value="mono",
                     label="입력 모드",
-                    info="mono: 2D 사진 1장 → 깊이 추정으로 입체화. sbs: 좌/우가 붙은 스테레오 입력.",
+                    info="mono: 2D 사진 1장 → 깊이 추정으로 입체화. sbs: 좌/우가 붙은 스테레오. 모드를 바꾸려면 변경 후 다시 업로드.",
                     elem_classes=["vr180-tip"],
                 )
-                new_btn = gr.Button("➕ 새 Job 만들기", variant="primary")
             with gr.Column(scale=2):
-                open_btn = gr.Button("📂 기존 Job 열기", size="lg")
-                cancel_btn = gr.Button("⏹ 실행 취소", variant="stop")
                 run_all_btn = gr.Button(
-                    "▶ 한번에 진행 (Stage 0 → 7)",
+                    RUN_ALL_LABEL,
                     variant="primary",
                     elem_classes=["vr180-run"],
                 )
-            with gr.Column(scale=2):
-                preset_dd = gr.Dropdown(choices=C.preset_choices(), label="프리셋", allow_custom_value=True)
-                with gr.Row():
-                    preset_save = gr.Button("💾 저장")
-                    preset_load = gr.Button("📥 불러오기")
+                cancel_btn = gr.Button("⏹ 실행 취소", variant="stop")
 
         # ───── Job 상태: 썸네일 + status + progress
         with gr.Row():
@@ -68,6 +81,82 @@ def build() -> gr.Blocks:
             with gr.Column(scale=5):
                 status = gr.Markdown(C.status_md(None))
                 progress = gr.Markdown("")
+
+        # ───── 주요 옵션 (상단으로 뺀 핵심 7개 — 각 Stage 가 아니라 여기서 설정)
+        with gr.Group(elem_classes=["vr180-main-opts"]):
+            gr.Markdown("### 🎛 주요 옵션 — 결과를 가장 크게 좌우")
+            with gr.Row():
+                hfov = gr.Slider(
+                    C.HFOV_MIN, C.HFOV_MAX, value=60, step=C.HFOV_STEP,
+                    label="hfov_deg (수평 화각)",
+                    info="업로드 때 자동 추정된 값. 필요하면 수동 조정 가능. 광각 액션캠은 100°+, 일반 사진 70~90°.",
+                    elem_classes=["vr180-tip"],
+                )
+                size = gr.Dropdown(
+                    [2048, 3072, 4096, 5120, 6144],
+                    value=4096,
+                    label="눈당 해상도 S",
+                    info="S×S half-equirect 캔버스. Quest 2/3 는 4096~5120 권장. 6144 는 PC 뷰어용.",
+                    elem_classes=["vr180-tip"],
+                )
+            with gr.Row():
+                ext_h = gr.Number(
+                    value=180, label="extent_h_deg (생성 수평°)",
+                    info="정면에서 좌우로 몇 ° 까지 생성할지. 180 = 반구 전체 (페이드 꺼짐, 기본). 좁히면 바깥은 어둡게 페이드.",
+                    elem_classes=["vr180-tip"],
+                )
+                ext_v = gr.Number(
+                    value=180, label="extent_v_deg (생성 수직°)",
+                    info="상하로 몇 ° 까지 생성할지. 180 = 반구 전체 (기본). Quest 시야(≈100°)만 쓰려면 100~120 권장.",
+                    elem_classes=["vr180-tip"],
+                )
+                fade = gr.Slider(
+                    0, 30, value=10, step=0.5, label="페이드 폭 (°)",
+                    info="생성 범위 바깥을 어둡게 섞는 폭. 8° 미만이면 깊이 벽이 느껴짐.",
+                    elem_classes=["vr180-tip"],
+                )
+            with gr.Row():
+                estimator = gr.Dropdown(
+                    ["none", "da2_small", "da2_base", "da2_large"],
+                    value="da2_large",
+                    label="mono depth 모델",
+                    info="Depth-Anything v2. large=품질 최고/느림, none=모델 없이 (sbs: stereo 외삽, mono: 평면).",
+                    elem_classes=["vr180-tip"],
+                )
+                depth_strength = gr.Slider(
+                    0.0, 0.06, value=0.02, step=0.002,
+                    label="depth_strength (mono 전용, rad)",
+                    info="mono 모드에서 각도 disparity 최댓값. ≈1.1° (0.02rad) 가 Quest 에서 편한 수준. sbs 는 자동 피팅이라 영향 없음.",
+                    elem_classes=["vr180-tip"],
+                )
+                inpainter = gr.Dropdown(
+                    ["opencv", "sdxl", "flux"],
+                    value="opencv",
+                    label="주변부 inpainter (Stage 3)",
+                    info="opencv=모델 없이 Telea (빠름, 묘사 없음, 주변시 방해↓, 기본). sdxl=빠름/보통 품질. flux=느리지만 자연스러움.",
+                    elem_classes=["vr180-tip"],
+                )
+            # 프롬프트는 opencv 일 때 숨김 (opencv Telea 는 프롬프트 안 씀). inpainter.change 로 토글.
+            prompt = gr.Textbox(
+                label="프롬프트 (sdxl/flux 전용)",
+                lines=2,
+                info="장면 묘사: 실내/실외, 조명, 바닥·천장 재질. 비워 두면 default.yaml 의 기본 프롬프트 사용.",
+                elem_classes=["vr180-tip"],
+                visible=False,
+            )
+        main_opts = [hfov, size, ext_h, ext_v, fade, estimator, depth_strength, inpainter, prompt]
+
+        # ───── 최종 출력 (한번에 진행 완료 시 Stage 7 산출물이 여기 뜸)
+        with gr.Group(elem_classes=["vr180-final"]):
+            gr.Markdown("### 📸 최종 출력 (VR180 SBS)")
+            final_output = gr.Image(
+                label=None,
+                show_label=False,
+                type="numpy",
+                interactive=False,
+                show_download_button=True,
+                height=420,
+            )
 
         # ───── 로그 (간략/상세 탭)
         with gr.Tabs():
@@ -85,20 +174,6 @@ def build() -> gr.Blocks:
                     autoscroll=True,
                 )
 
-        # ───── Job 팝업 (visible 토글)
-        with gr.Column(visible=False, elem_classes=["vr180-popup"]) as popup:
-            gr.Markdown("### 📂 기존 Job 선택 — 썸네일을 클릭하세요")
-            job_gallery = gr.Gallery(
-                show_label=False,
-                columns=4,
-                height=440,
-                allow_preview=False,
-                object_fit="cover",
-            )
-            with gr.Row():
-                refresh_btn = gr.Button("🔄 목록 새로고침")
-                close_popup_btn = gr.Button("✖ 닫기")
-
         shared: dict = {
             "job_id": job_id,
             "status": status,
@@ -107,18 +182,26 @@ def build() -> gr.Blocks:
             "log_full": log_full,
             "input_thumb": input_thumb,
             "after_load": [],
-            # 실행 중 상호 비활성화 대상. run_all_btn 포함, 각 탭 build() 가 자기 run 버튼 append.
-            "all_run_buttons": [run_all_btn],
-            # 각 탭이 click 와이어링 closure 를 append → 포스트빌드 일괄 실행 (all_run_buttons 완성 후).
-            "after_build_wires": [],
+            # 탭 안 '고급' 위젯들이 run_all 시 함께 반영되도록 (widget, stage, key, converter) 를 append.
+            "param_bindings": [],
         }
 
-        # ───── Stage 탭 (완료 시 자동 다음 탭 전환을 위해 Tabs 참조 공유)
-        loaders: list[tuple] = []
-        with gr.Tabs() as stage_tabs:
-            shared["stage_tabs"] = stage_tabs
-            for t in TABS:
-                loaders.append(t.build(shared))
+        def _load_output(job_id):
+            from vr180.pipeline.stage_07_output import output_basename
+
+            job = C.get_job(job_id)
+            if job is None:
+                return [None]
+            png = job.path(7, f"{output_basename(job)}.png")
+            return [C.preview(png, 2048) if png.exists() else None]
+
+        # ───── Stage 탭 — 미리보기·고급 설정 (접힘)
+        loaders: list[tuple] = [(_load_main, main_opts), (_load_output, [final_output])]
+        with gr.Accordion("📂 스테이지별 미리보기 / 고급 설정 (평소에는 접어둠)", open=False):
+            with gr.Tabs() as stage_tabs:
+                shared["stage_tabs"] = stage_tabs
+                for t in TABS:
+                    loaders.append(t.build(shared))
 
         all_outputs = [c for _, outs in loaders for c in outs]
 
@@ -128,77 +211,100 @@ def build() -> gr.Blocks:
                 vals += fn(jid)
             return vals
 
-        def do_new(f, mode):
+        def _snap_or_default(raw: float) -> tuple[float, str]:
+            """raw 가 범위 밖/반올림 필요하면 꼬리표를 함께. UI 로그용."""
+            snapped = C.snap_hfov(raw)
+            if raw < C.HFOV_MIN:
+                return snapped, f" → 하한 {C.HFOV_MIN:g}° 로 클램프"
+            if raw > C.HFOV_MAX:
+                return snapped, f" → 상한 {C.HFOV_MAX:g}° 로 클램프"
+            if abs(snapped - raw) >= C.HFOV_STEP / 2:
+                return snapped, f" → {snapped:g}° 로 반올림"
+            return snapped, ""
+
+        def do_upload(f, mode):
+            """사진 업로드 → Job 자동 생성 + 화각 자동 추정. 실패 시 60° 로 폴백."""
+            if not f:
+                return None, C.status_md(None), None, gr.update(), ""
             j, _, md = C.create_job(f, None, input_mode=mode)
-            return j, md, C.input_preview(j)
+            try:
+                raw, conf, name = C.estimate_hfov_from_job(j)
+                hfov_v, tag = _snap_or_default(raw)
+                log = f"📐 {name}: 추정 {raw:.2f}° (confidence {conf:.2f}){tag} → 슬라이더 반영"
+            except Exception as e:  # noqa: BLE001  (geocalib 미설치/수렴 실패 등 모두 60 폴백)
+                hfov_v = 60.0
+                log = f"⚠️ 화각 자동 추정 실패 ({type(e).__name__}: {e}) — 디폴트 60° 적용"
+            # params 에도 즉시 반영 → load_all 재조회 시 일관성 유지. auto_estimate 는 끈 상태로 저장
+            # (파이프라인에서 GeoCalib 를 다시 돌리지 않고 이 hfov 값을 그대로 쓰도록).
+            job = C.get_job(j)
+            if job is not None:
+                job.set_param(1, "hfov_deg", float(hfov_v))
+                job.set_param(1, "auto_estimate", False)
+                job.save_params()
+            return j, md, C.input_preview(j), gr.update(value=hfov_v), log
 
-        def do_open_popup():
-            jobs = C.job_choices()
-            items = []
-            jids = []
-            for jid in jobs:
-                p = C.job_input_path(jid)
-                if p is None:
-                    continue
-                items.append((str(p), jid))
-                jids.append(jid)
-            return gr.update(visible=True), items, jids
-
-        def do_pick(jlist, evt: gr.SelectData):
-            if not jlist or evt.index is None or evt.index >= len(jlist):
-                return gr.update(), gr.update(), gr.update(visible=False), None
-            jid = jlist[evt.index]
-            return jid, C.status_md(jid), gr.update(visible=False), C.input_preview(jid)
-
-        new_evt = new_btn.click(
-            do_new, [upload, input_mode_radio], [job_id, status, input_thumb]
-        ).then(load_all, [job_id], all_outputs)
-
-        pick_evt = job_gallery.select(
-            do_pick, [job_list_state], [job_id, status, popup, input_thumb]
+        upload_evt = upload.upload(
+            do_upload, [upload, input_mode_radio], [job_id, status, input_thumb, hfov, log_brief]
         ).then(load_all, [job_id], all_outputs)
 
         for fn, ins, outs in shared["after_load"]:
-            new_evt.then(fn, ins, outs)
-            pick_evt.then(fn, ins, outs)
-
-        open_btn.click(do_open_popup, None, [popup, job_gallery, job_list_state])
-        refresh_btn.click(do_open_popup, None, [popup, job_gallery, job_list_state])
-        close_popup_btn.click(lambda: gr.update(visible=False), None, [popup])
+            upload_evt.then(fn, ins, outs)
 
         cancel_btn.click(C.cancel_run, [job_id], [log_brief])
-        preset_save.click(C.save_preset, [job_id, preset_dd], [preset_dd])
-        preset_load.click(C.load_preset, [job_id, preset_dd], [status]).then(
-            load_all, [job_id], all_outputs
+
+        # 프롬프트는 opencv (Telea) 일 때 숨김 — 모델 호출 없는 inpainter 는 프롬프트 안 씀
+        inpainter.change(
+            lambda v: gr.update(visible=(v != "opencv")), [inpainter], [prompt]
         )
 
-        RUN_ALL_LABEL = "▶ 한번에 진행 (Stage 0 → 7)"
+        # ───── '한번에 진행' — 상단 주요 옵션 + 탭 안 고급 위젯 전부 수집해 param_updates 생성
+        bindings = shared["param_bindings"]
+        N_MAIN = len(main_opts)
 
-        def run_all_pipeline(jid):
-            # Stage 0 → 7 쭉 돌림. force_from=False 로 캐시 유효한 Stage 는 재사용.
-            yield from C.run_pipeline(jid, 0, None, force_from=False)
+        def run_all_pipeline(jid, *vals):
+            main_vals = vals[:N_MAIN]
+            tab_vals = vals[N_MAIN:]
+            (
+                hfov_v, size_v, ext_h_v, ext_v_v, fade_v,
+                estimator_v, depth_s_v, inpainter_v, prompt_v,
+            ) = main_vals
+            param_updates: dict[int, dict] = {}
+            # 탭 고급 위젯 먼저 반영 → 상단 주요 옵션이 뒤이어 덮어씀 (상단이 우선).
+            for v, (_, stage, key, conv) in zip(tab_vals, bindings, strict=True):
+                param_updates.setdefault(stage, {})[key] = conv(v)
+            # Stage 1 은 '한번에 진행' 때 재추정 안 함: 업로드 때 자동 추정하거나 사용자가 수동으로 둔 값을 그대로 쓴다.
+            param_updates.setdefault(1, {}).update(
+                {"hfov_deg": float(hfov_v), "auto_estimate": False}
+            )
+            param_updates.setdefault(2, {}).update(
+                {
+                    "size": int(size_v),
+                    "extent_h_deg": float(ext_h_v),
+                    "extent_v_deg": float(ext_v_v),
+                    "extent_fade_deg": float(fade_v),
+                }
+            )
+            param_updates.setdefault(3, {}).update(
+                {"inpainter": inpainter_v, "prompt": (prompt_v or "").strip() or None}
+            )
+            param_updates.setdefault(5, {}).update(
+                {"estimator": estimator_v, "depth_strength": float(depth_s_v)}
+            )
+            yield from C.run_pipeline(jid, 0, None, param_updates=param_updates, force_from=False)
 
-        def _wire_run_all():
-            other_btns = [b for b in shared["all_run_buttons"] if b is not run_all_btn]
-            run_all_btn.click(
-                C.with_button_lock(run_all_pipeline, RUN_ALL_LABEL, n_other=len(other_btns)),
-                [job_id],
-                [
-                    run_all_btn,
-                    *other_btns,
-                    log_brief,
-                    log_full,
-                    status,
-                    progress,
-                    stage_tabs,
-                ],
-            ).then(load_all, [job_id], all_outputs)
-
-        shared["after_build_wires"].append(_wire_run_all)
-
-        # ───── 포스트빌드: 모든 run 버튼 와이어링을 여기서 일괄 실행 (all_run_buttons 완성된 상태)
-        for wire in shared["after_build_wires"]:
-            wire()
+        binding_widgets = [w for (w, _, _, _) in bindings]
+        run_all_btn.click(
+            C.with_button_lock(run_all_pipeline, RUN_ALL_LABEL, n_other=0),
+            [job_id, *main_opts, *binding_widgets],
+            [
+                run_all_btn,
+                log_brief,
+                log_full,
+                status,
+                progress,
+                stage_tabs,
+            ],
+        ).then(load_all, [job_id], all_outputs)
     return demo
 
 
