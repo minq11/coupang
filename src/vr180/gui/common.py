@@ -599,6 +599,77 @@ def estimate_hfov_from_job(job_id: str | None) -> tuple[float, float, str]:
     return float(hfov), float(conf), model_name
 
 
+def run_video_stream(
+    input_video: str,
+    output_video: str,
+    *,
+    mode: str,
+    ref_time: float,
+    depth_model: str,
+    codec: str,
+    crf: int,
+    check_motion: bool,
+    params_override: dict | None = None,
+):
+    """gradio generator — vr180.video.run.run_video 를 백그라운드 스레드로 돌리면서 ctx.lines 를
+    0.5s 간격으로 yield 한다. 반환: (log_brief, log_full, progress_md, output_video_path | None)."""
+    import threading
+    import time as _time
+    import traceback
+
+    from vr180.util.log import RunContext
+    from vr180.video.run import run_video as _run
+
+    full_lines: list[str] = []
+
+    def _file_log(line: str) -> None:
+        full_lines.append(line)
+
+    ctx = RunContext(log_fn=_file_log)
+    err: list[BaseException] = []
+    result: dict = {}
+
+    def worker() -> None:
+        try:
+            r = _run(
+                input_video=input_video,
+                output_video=output_video,
+                input_mode=mode,
+                ref_time=ref_time,
+                depth_model=depth_model,
+                codec=codec,
+                crf=int(crf),
+                check_motion=check_motion,
+                params_override=params_override,
+                ctx=ctx,
+            )
+            result.update(r)
+        except BaseException as e:  # noqa: BLE001
+            err.append(e)
+            full_lines.extend(traceback.format_exc().splitlines())
+
+    th = threading.Thread(target=worker, daemon=True)
+    th.start()
+    while th.is_alive():
+        yield (
+            "\n".join(ctx.lines[-200:]),
+            "\n".join(full_lines[-800:]),
+            "⏳ 진행 중…",
+            None,
+        )
+        _time.sleep(0.5)
+    th.join()
+    msg = "완료" if not err else f"오류: {type(err[0]).__name__}: {err[0]}"
+    yield (
+        "\n".join(ctx.lines[-200:]),
+        "\n".join(full_lines[-800:]),
+        msg + (f" · {result.get('frames', '?')} 프레임 → `{result.get('output', output_video)}`" if not err else ""),
+        output_video if (not err and Path(output_video).exists()) else None,
+    )
+    if err:
+        raise gr.Error(f"{type(err[0]).__name__}: {err[0]}")
+
+
 def cancel_run(job_id: str | None) -> str:
     ctx = _running.get(job_id or "")
     if ctx is None:

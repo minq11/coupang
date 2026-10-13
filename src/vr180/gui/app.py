@@ -9,6 +9,7 @@ import gradio as gr
 
 from vr180 import __version__
 from vr180.gui import common as C
+from vr180.gui import video as video_tab
 from vr180.gui.tabs import (
     tab0_input,
     tab1_fov,
@@ -43,7 +44,18 @@ def _load_main(job_id):
 
 def build() -> gr.Blocks:
     with gr.Blocks(title=f"vr180 {__version__}", theme=gr.themes.Soft(), css=C.CSS) as demo:
-        gr.Markdown("## 3D SBS → VR180 SBS 변환 파이프라인")
+        gr.Markdown("## VR180 변환 파이프라인")
+        with gr.Tabs():
+            with gr.Tab("📷 사진"):
+                _build_photo()
+            with gr.Tab("🎞 영상"):
+                video_tab.build()
+    return demo
+
+
+def _build_photo() -> None:
+    """사진 흐름 — 기존 로직을 그대로 담은 사진 전용 탭."""
+    with gr.Column():
         job_id = gr.State(None)
         raw_preview = gr.State(None)  # 가늠자 재렌더용: 업로드 때 저장한 raw(sbs 는 좌반) 다운샘플
 
@@ -326,7 +338,6 @@ def build() -> gr.Blocks:
                 stage_tabs,
             ],
         ).then(load_all, [job_id], all_outputs)
-    return demo
 
 
 def launch(port: int | None = None, share: bool = False) -> None:
