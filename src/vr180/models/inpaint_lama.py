@@ -97,7 +97,11 @@ class LaMaInpainter(Inpainter):
         if not self.weights.exists():
             log = self.ctx.log if getattr(self, "ctx", None) is not None else print
             download_lama(self.weights, log=log)
-        self.model = torch.jit.load(str(self.weights), map_location=self.device)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)  # torch.jit.load deprecation 안내 숨김
+            self.model = torch.jit.load(str(self.weights), map_location=self.device)
         self.model.eval()
 
     def _unload(self) -> None:
