@@ -9,6 +9,9 @@ from vr180.models.base import Inpainter, ModelInfo
 
 
 class OpenCVInpainter(Inpainter):
+    MODEL_FREE = True
+    NEEDS_PROMPT = False
+
     def __init__(self, model_cfg: dict, radius: int = 5):
         super().__init__(model_cfg)
         self.radius = radius

@@ -1,5 +1,5 @@
 """Gradio 레이아웃. 상단: 입력 / Job / 썸네일 / 주요 옵션 7개 / 로그.
-   아래: Stage 0~7 탭은 접힌 Accordion 안 (미리보기·고급용). 실행은 상단 '한번에 진행' 하나로 통일."""
+아래: Stage 0~7 탭은 접힌 Accordion 안 (미리보기·고급용). 실행은 상단 '한번에 진행' 하나로 통일."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from vr180.gui.tabs import (
     tab6_right,
     tab7_output,
 )
+from vr180.models.registry import INPAINTER_CHOICES, INPAINTER_NAMES, inpainter_needs_prompt
 
 TABS = [tab0_input, tab1_fov, tab2_reproj, tab3_outpaint, tab4_stereo, tab5_depth, tab6_right, tab7_output]
 
@@ -101,13 +102,19 @@ def _build_photo() -> None:
             gr.Markdown("### 🎛 주요 옵션 — 결과를 가장 크게 좌우")
             with gr.Row():
                 hfov = gr.Slider(
-                    C.HFOV_MIN, C.HFOV_MAX, value=60, step=C.HFOV_STEP,
+                    C.HFOV_MIN,
+                    C.HFOV_MAX,
+                    value=60,
+                    step=C.HFOV_STEP,
                     label="hfov_deg (수평 화각)",
                     info="업로드 때 자동 추정된 값. 필요하면 수동 조정. 광각 액션캠은 100°+, 일반 사진 70~90°.",
                     elem_classes=["vr180-tip"],
                 )
                 pitch = gr.Slider(
-                    -60, 60, value=0, step=0.5,
+                    -60,
+                    60,
+                    value=0,
+                    step=0.5,
                     label="pitch_offset_deg (얼굴 올리기)",
                     info="+ = VR 적도를 사진 위쪽(얼굴 방향) 으로. 썸네일의 노란 가로선이 얼굴에 걸치는 값이 정답. 전신 세로샷 보통 +20~+30°.",
                     elem_classes=["vr180-tip"],
@@ -121,17 +128,23 @@ def _build_photo() -> None:
                 )
             with gr.Row():
                 ext_h = gr.Number(
-                    value=180, label="extent_h_deg (생성 수평°)",
+                    value=180,
+                    label="extent_h_deg (생성 수평°)",
                     info="정면에서 좌우로 몇 ° 까지 생성할지. 180 = 반구 전체 (페이드 꺼짐, 기본). 좁히면 바깥은 어둡게 페이드.",
                     elem_classes=["vr180-tip"],
                 )
                 ext_v = gr.Number(
-                    value=180, label="extent_v_deg (생성 수직°)",
+                    value=180,
+                    label="extent_v_deg (생성 수직°)",
                     info="상하로 몇 ° 까지 생성할지. 180 = 반구 전체 (기본). Quest 시야(≈100°)만 쓰려면 100~120 권장.",
                     elem_classes=["vr180-tip"],
                 )
                 fade = gr.Slider(
-                    0, 30, value=10, step=0.5, label="페이드 폭 (°)",
+                    0,
+                    30,
+                    value=10,
+                    step=0.5,
+                    label="페이드 폭 (°)",
                     info="생성 범위 바깥을 어둡게 섞는 폭. 8° 미만이면 깊이 벽이 느껴짐.",
                     elem_classes=["vr180-tip"],
                 )
@@ -144,16 +157,19 @@ def _build_photo() -> None:
                     elem_classes=["vr180-tip"],
                 )
                 depth_strength = gr.Slider(
-                    0.0, 0.06, value=0.02, step=0.002,
+                    0.0,
+                    0.06,
+                    value=0.02,
+                    step=0.002,
                     label="depth_strength (mono 전용, rad)",
                     info="mono 모드에서 각도 disparity 최댓값. ≈1.1° (0.02rad) 가 Quest 에서 편한 수준. sbs 는 자동 피팅이라 영향 없음.",
                     elem_classes=["vr180-tip"],
                 )
                 inpainter = gr.Dropdown(
-                    ["opencv", "sdxl", "flux"],
+                    INPAINTER_NAMES,
                     value="opencv",
                     label="주변부 inpainter (Stage 3)",
-                    info="opencv=모델 없이 Telea (빠름, 묘사 없음, 주변시 방해↓, 기본). sdxl=빠름/보통 품질. flux=느리지만 자연스러움.",
+                    info=" · ".join(f"{n}={d}" for n, d, _ in INPAINTER_CHOICES),
                     elem_classes=["vr180-tip"],
                 )
             # 프롬프트는 opencv 일 때 숨김 (opencv Telea 는 프롬프트 안 씀). inpainter.change 로 토글.
@@ -181,9 +197,7 @@ def _build_photo() -> None:
         # ───── 로그 (간략/상세 탭)
         with gr.Tabs():
             with gr.Tab("📋 간략"):
-                log_brief = gr.Textbox(
-                    label=None, show_label=False, lines=6, max_lines=14, interactive=False
-                )
+                log_brief = gr.Textbox(label=None, show_label=False, lines=6, max_lines=14, interactive=False)
             with gr.Tab("🔎 상세 (CMD 원문)"):
                 log_full = gr.Textbox(
                     label=None,
@@ -285,9 +299,7 @@ def _build_photo() -> None:
         cancel_btn.click(C.cancel_run, [job_id], [log_brief])
 
         # 프롬프트는 opencv (Telea) 일 때 숨김 — 모델 호출 없는 inpainter 는 프롬프트 안 씀
-        inpainter.change(
-            lambda v: gr.update(visible=(v != "opencv")), [inpainter], [prompt]
-        )
+        inpainter.change(lambda v: gr.update(visible=inpainter_needs_prompt(v)), [inpainter], [prompt])
 
         # ───── '한번에 진행' — 상단 주요 옵션 + 탭 안 고급 위젯 전부 수집해 param_updates 생성
         bindings = shared["param_bindings"]
@@ -297,17 +309,23 @@ def _build_photo() -> None:
             main_vals = vals[:N_MAIN]
             tab_vals = vals[N_MAIN:]
             (
-                hfov_v, pitch_v, size_v, ext_h_v, ext_v_v, fade_v,
-                estimator_v, depth_s_v, inpainter_v, prompt_v,
+                hfov_v,
+                pitch_v,
+                size_v,
+                ext_h_v,
+                ext_v_v,
+                fade_v,
+                estimator_v,
+                depth_s_v,
+                inpainter_v,
+                prompt_v,
             ) = main_vals
             param_updates: dict[int, dict] = {}
             # 탭 고급 위젯 먼저 반영 → 상단 주요 옵션이 뒤이어 덮어씀 (상단이 우선).
             for v, (_, stage, key, conv) in zip(tab_vals, bindings, strict=True):
                 param_updates.setdefault(stage, {})[key] = conv(v)
             # Stage 1 은 '한번에 진행' 때 재추정 안 함: 업로드 때 자동 추정하거나 사용자가 수동으로 둔 값을 그대로 쓴다.
-            param_updates.setdefault(1, {}).update(
-                {"hfov_deg": float(hfov_v), "auto_estimate": False}
-            )
+            param_updates.setdefault(1, {}).update({"hfov_deg": float(hfov_v), "auto_estimate": False})
             param_updates.setdefault(2, {}).update(
                 {
                     "size": int(size_v),

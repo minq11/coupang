@@ -1,11 +1,12 @@
 """탭 6 — Right 합성: pano_R, hole 마스크, L/R 토글, 애너글리프. 고급: hole_px, inpaint 모델.
-   (Stage 6 inpainter 는 큰 구멍 메우기 전용 — Stage 3 outpainter 와 다름.)"""
+(Stage 6 inpainter 는 큰 구멍 메우기 전용 — Stage 3 outpainter 와 다름.)"""
 
 from __future__ import annotations
 
 import gradio as gr
 
 from vr180.gui import common as C
+from vr180.models.registry import INPAINTER_NAMES
 
 STAGE = 6
 
@@ -32,15 +33,18 @@ def build(shared):
         with gr.Accordion("고급 설정 (잘 안 바꿈)", open=False):
             with gr.Row():
                 inp = gr.Dropdown(
-                    ["opencv", "sdxl", "flux"],
+                    INPAINTER_NAMES,
                     value="opencv",
                     label="큰 구멍 inpainter",
-                    info="hole_px 초과 구멍을 메울 모델. opencv=빠른 Telea (기본), sdxl/flux=디테일 생성. "
+                    info="hole_px 초과 구멍을 메울 모델. opencv/stretch=모델 없음 (기본), lama=빠른 구조 복원, sdxl*/flux=디테일 생성. "
                     "Stage 3 outpainter 와 별개.",
                     elem_classes=["vr180-tip"],
                 )
                 hole = gr.Slider(
-                    0, 5000, value=400, step=50,
+                    0,
+                    5000,
+                    value=400,
+                    step=50,
                     label="hole_px (threshold)",
                     info="이 면적(px²) 이하 구멍은 Telea 로 빠르게, 초과는 inpaint 모델로. 작을수록 모델 호출↑.",
                     elem_classes=["vr180-tip"],
@@ -59,10 +63,12 @@ def build(shared):
         def show(which, l_img, r_img):
             return l_img if which == "L" else r_img
 
-        shared["param_bindings"].extend([
-            (hole, STAGE, "hole_px", lambda v: int(v)),
-            (inp, STAGE, "inpainter", str),
-        ])
+        shared["param_bindings"].extend(
+            [
+                (hole, STAGE, "hole_px", lambda v: int(v)),
+                (inp, STAGE, "inpainter", str),
+            ]
+        )
         toggle.change(show, [toggle, l_hidden, r_hidden], [lr_view])
         shared["after_load"].append((show, [toggle, l_hidden, r_hidden], [lr_view]))
     return load, outputs

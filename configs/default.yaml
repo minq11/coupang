@@ -35,7 +35,8 @@ stage_02_reproj:
   tile_min_new_fraction: 0.01   # Stage 3: 새로 채울 픽셀이 이 비율 미만이면 타일 생략.
 
 stage_03_outpaint:
-  inpainter: opencv       # opencv | sdxl | flux   (opencv 는 Telea — 빠르고 묘사 없음, 주변시 방해↓)
+  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm | sdxl | flux
+                          # 빠른 순. opencv/stretch 는 모델 없음, lama 는 경량 신경망(프롬프트 없음), 나머지는 확산 모델
   prompt: "indoor scene, natural lighting, photorealistic, consistent perspective"
   negative_prompt: "text, watermark, people, blurry, distorted"
   seed: 42
@@ -81,7 +82,7 @@ stage_05_depth:
 
 stage_06_right:
   hole_px: 400            # 이 면적(px²) 이하 구멍은 Telea, 초과는 inpaint 모델
-  inpainter: opencv       # opencv | sdxl | flux
+  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm | sdxl | flux
   blend_deg: 8.0
   splat_taps: 2           # 1 | 2  (2 면 양 옆 픽셀에도 splat 해서 균열 감소)
   mono_symmetric: true    # mono 모드: true 면 가운데 뷰를 양쪽으로 ±d/2 워핑 (기본).
@@ -100,6 +101,14 @@ video:
 
 models:
   sdxl_inpaint_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+  sdxl_lcm_lora_id: latent-consistency/lcm-lora-sdxl          # inpainter=sdxl_lcm
+  sdxl_lightning_repo: ByteDance/SDXL-Lightning                # inpainter=sdxl_lightning
+  sdxl_lightning_file: sdxl_lightning_4step_lora.safetensors
+  # inpainter=stretch (늘리기+블러) 세부. 비율은 타일 긴 변 기준.
+  stretch_sigma_min_frac: 0.01
+  stretch_sigma_max_frac: 0.08
+  stretch_reach_frac: 0.5
+  stretch_darken: 0.15
   flux_fill_id: black-forest-labs/FLUX.1-Fill-dev
   flux_fill_gguf_repo: YarvixPA/FLUX.1-Fill-dev-GGUF
   flux_fill_gguf_file: flux1-fill-dev-Q4_K_S.gguf

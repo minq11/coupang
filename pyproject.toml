@@ -40,6 +40,8 @@ geocalib = ["geocalib @ git+https://github.com/cvg/GeoCalib.git"]
 lightglue = ["lightglue @ git+https://github.com/cvg/LightGlue.git"]
 # Video Depth Anything (영상 mono 깊이, iw3 없이 2D 영상 → VR180)
 vda = ["einops>=0.7", "easydict>=1.9"]
+# Stage 3/6 inpainter=lama (big-lama, 프롬프트 없는 경량 inpaint)
+lama = ["simple-lama-inpainting>=0.1.2"]
 
 [dependency-groups]
 dev = [

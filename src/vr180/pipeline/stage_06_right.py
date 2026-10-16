@@ -62,7 +62,7 @@ def _fill_holes(rgb: np.ndarray, holes: np.ndarray, hole_px: int, inpainter, par
         out = cv2.inpaint(out, small, 3, cv2.INPAINT_TELEA)
     if big.max() > 0:
         ctx.log(f"큰 구멍 {int((big > 0).sum())}px → {inpainter.info().name}")
-        if inpainter.info().name.startswith("opencv"):
+        if getattr(inpainter, "MODEL_FREE", False) or inpainter.info().name.startswith("opencv"):
             out = inpainter.inpaint(out, big)
         else:
             # 큰 구멍은 구멍을 포함하는 영역을 타일로 잘라 모델에 넣는다 (equirect 왜곡은 구멍이 작아 무시)
@@ -136,8 +136,12 @@ def _run_mono(job, params: dict, ctx) -> dict:
     inpainter = get_inpainter(params.get("inpainter", "opencv"), job.model_params())
     inpainter.ctx = ctx
     with inpainter:
-        filled_l = _fill_holes(warped_l, holes_l, int(params.get("hole_px", 400)), inpainter, fill_params, ctx)
-        filled_r = _fill_holes(warped_r, holes_r, int(params.get("hole_px", 400)), inpainter, fill_params, ctx)
+        filled_l = _fill_holes(
+            warped_l, holes_l, int(params.get("hole_px", 400)), inpainter, fill_params, ctx
+        )
+        filled_r = _fill_holes(
+            warped_r, holes_r, int(params.get("hole_px", 400)), inpainter, fill_params, ctx
+        )
 
     # extent 페이드: 범위 밖은 양 눈이 완전 동일 (시차 0).
     filled_l = _apply_extent(filled_l, extent_w, extent_color)

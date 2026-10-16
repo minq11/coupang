@@ -240,3 +240,28 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 ### 검증
 - `test_reproject.py`: pitch=+20° 로 붙인 수평선(원근 이미지의 특정 행)이 equirect 에서 φ=+20° 부근 곡선에 오는지. roll=5° 로 수직선이 기울어지는지.
 - Quest: 전신 사진에서 사람이 똑바로 서 보이고 바닥이 수평인지. 얼굴 비율이 자연스러운지(화각과 함께 조정).
+
+---
+
+## 5. 빠른 주변부 채우기 3종 — 구현됨 (`inpainter=stretch | lama | sdxl_lightning | sdxl_lcm`)
+
+### 왜
+- 주변부는 주변시로 보는 영역이라 선명도보다 색·밝기·대략적 구조의 연속성이 중요하다. FLUX(30~60초/타일) 와 Telea(번짐) 사이에 빠른 선택지가 없었다.
+
+### 무엇을 (models/ 에 구현체만 추가, Stage 코드는 그대로)
+| 이름 | 파일 | 원리 | 속도(1024 타일) | 프롬프트 |
+|---|---|---|---|---|
+| `stretch` | `inpaint_stretch.py` | 가장자리 픽셀을 바깥으로 늘리고 거리 비례 블러 + 살짝 어둡게. 앰비언트 조명 느낌 | 수십 ms, CPU | 없음 |
+| `lama` | `inpaint_lama.py` | LaMa big-lama (simple-lama-inpainting). 푸리에 합성곱으로 벽·바닥 선을 이음 | ~1초, VRAM 2GB | 없음 |
+| `sdxl_lightning` | `inpaint_sdxl.py` variant | SDXL inpainting + ByteDance Lightning 4-step LoRA, Euler trailing, CFG 없음 | 2~4초 | 있음 |
+| `sdxl_lcm` | `inpaint_sdxl.py` variant | SDXL inpainting + LCM-LoRA 8-step, guidance 1~2 | 3~5초 | 있음 |
+
+- `Inpainter` 에 `MODEL_FREE` / `NEEDS_PROMPT` 클래스 속성 추가. Stage 6 은 `MODEL_FREE` 면 타일 자르기 없이 바로 호출, GUI 는 `NEEDS_PROMPT` 로 프롬프트 입력 표시를 정한다.
+- `registry.INPAINTER_CHOICES` 가 이름·설명·프롬프트 여부의 단일 출처 (GUI 드롭다운 두 곳이 이걸 읽는다).
+- `fetch-models --lama`, `--sdxl-fast`. 설치: `uv sync --extra lama`.
+- `models` 설정: `stretch_sigma_min_frac / max_frac / reach_frac / darken`, `sdxl_lcm_lora_id`, `sdxl_lightning_repo / file`.
+
+### 남은 것
+- [ ] Quest 비교: stretch(+범위 제한) vs lama vs sdxl_lightning. 기본값을 opencv 에서 stretch 로 바꿀지 결정.
+- [ ] SHIFTMAP(PatchMatch, opencv-contrib) 은 opencv-python 과 패키지 충돌이라 보류. 필요하면 opencv-contrib-python 으로 교체.
+- [ ] lama / sdxl 가속 변형은 GPU 환경에서 미실행 (코드 경로만 작성). 첫 실행 로그 확인.

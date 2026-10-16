@@ -70,6 +70,10 @@ class Inpainter(BaseModel):
 
     # 선택: RunContext. 설정되면 inpaint 중 denoising step 마다 cancel 체크 (diffusers callback_on_step_end 로).
     ctx = None
+    # 모델(GPU) 없이 도는 구현이면 True — Stage 6 은 이 경우 타일 자르기 없이 전체 이미지를 바로 넘긴다.
+    MODEL_FREE = False
+    # 프롬프트를 쓰는 구현이면 True — GUI 가 프롬프트 입력을 보일지 정한다.
+    NEEDS_PROMPT = True
 
     @abstractmethod
     def inpaint(

@@ -5,7 +5,7 @@ vr180 status --job ID
 vr180 jobs
 vr180 gui [--port 7860]
 vr180 make-sample samples/synthetic_sbs.png
-vr180 fetch-models [--sdxl] [--da2] [--flux] [--raft-stereo] [--all]
+vr180 fetch-models [--sdxl] [--sdxl-fast] [--lama] [--da2] [--flux] [--raft-stereo] [--vda] [--all]
 """
 
 from __future__ import annotations
@@ -115,6 +115,8 @@ def cmd_fetch_models(a) -> int:
         raft_stereo=a.raft_stereo or a.all,
         raft_flow=a.raft_flow or a.all,
         vda=a.vda or a.all,
+        lama=a.lama or a.all,
+        sdxl_fast=a.sdxl_fast or a.all,
     )
 
 
@@ -197,7 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--flux", action="store_true")
     f.add_argument("--raft-stereo", action="store_true")
     f.add_argument("--raft-flow", action="store_true")
-    f.add_argument("--vda", action="store_true", help="Video Depth Anything 저장소+가중치 (2D 영상 → mono 경로)")
+    f.add_argument(
+        "--vda", action="store_true", help="Video Depth Anything 저장소+가중치 (2D 영상 → mono 경로)"
+    )
+    f.add_argument(
+        "--lama",
+        action="store_true",
+        help="LaMa big-lama 가중치 (inpainter=lama, `uv sync --extra lama` 필요)",
+    )
+    f.add_argument(
+        "--sdxl-fast", action="store_true", help="SDXL 가속 LoRA 두 개 (inpainter=sdxl_lcm / sdxl_lightning)"
+    )
     f.add_argument("--all", action="store_true")
     f.set_defaults(fn=cmd_fetch_models)
 
@@ -205,7 +217,9 @@ def build_parser() -> argparse.ArgumentParser:
         "video",
         help="영상을 VR180 SBS 로 변환 (고정 샷 전용). 기준 프레임의 주변부를 1회 만들어 모든 프레임 재사용.",
     )
-    v.add_argument("--input", "-i", required=True, help="입력 영상 (sbs 모드: iw3 등으로 미리 SBS 변환된 영상)")
+    v.add_argument(
+        "--input", "-i", required=True, help="입력 영상 (sbs 모드: iw3 등으로 미리 SBS 변환된 영상)"
+    )
     v.add_argument("--output", "-o", required=True, help="출력 .mp4 경로")
     v.add_argument(
         "--mode",
@@ -215,7 +229,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     v.add_argument("--ref-frame", type=int, default=None, help="기준 프레임 번호 (기본 0)")
     v.add_argument("--ref-time", type=float, default=None, help="기준 시각(초). ref-frame 과 둘 중 하나만.")
-    v.add_argument("--surround-job", default=None, help="이미 만든 Job id 를 재사용 (기준 프레임 재생성 생략)")
+    v.add_argument(
+        "--surround-job", default=None, help="이미 만든 Job id 를 재사용 (기준 프레임 재생성 생략)"
+    )
     v.add_argument("--codec", default="libx265")
     v.add_argument("--crf", type=int, default=20)
     v.add_argument("--fps", type=float, default=None, help="출력 fps. 생략하면 입력 fps 그대로.")

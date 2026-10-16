@@ -25,9 +25,7 @@ def _fetch_vda(cfg: dict) -> int:
     repo_dir = paths.third_party_dir() / "Video-Depth-Anything"
     if not (repo_dir / "video_depth_anything").exists():
         print(f"[git] {cfg['vda_repo']} → {repo_dir}")
-        subprocess.run(
-            ["git", "clone", "--depth", "1", cfg["vda_repo"], str(repo_dir)], check=True
-        )
+        subprocess.run(["git", "clone", "--depth", "1", cfg["vda_repo"], str(repo_dir)], check=True)
     else:
         print(f"[skip] VDA 저장소 이미 있음: {repo_dir}")
     # 가중치 — 두 사이즈 모두 (사용 안 할 수도 있지만 선택을 위해 받아둠)
@@ -51,6 +49,7 @@ def _fetch_vda(cfg: dict) -> int:
             # local_dir 사용 시 HF 가 그 안에 바로 저장함
             if not target.exists():  # 혹시 다른 경로에 들어갔으면 복사
                 import shutil as _sh
+
                 _sh.copy2(path, target)
         except Exception as e:  # noqa: BLE001
             print(f"VDA {size} 가중치 다운로드 실패 ({e}). HF 토큰·네트워크 확인 후 재시도.")
@@ -58,10 +57,40 @@ def _fetch_vda(cfg: dict) -> int:
     return rc
 
 
-def fetch_models(sdxl=False, da2=False, flux=False, raft_stereo=False, raft_flow=False, vda=False) -> int:
+def fetch_models(
+    sdxl=False,
+    da2=False,
+    flux=False,
+    raft_stereo=False,
+    raft_flow=False,
+    vda=False,
+    lama=False,
+    sdxl_fast=False,
+) -> int:
     paths.ensure_hf_env()
     cfg = load_default_params()["models"]
     rc = 0
+    if lama:
+        # simple-lama 는 첫 생성 때 big-lama.pt 를 torch hub 캐시로 내려받는다 → models/torch_hub 로 고정
+        try:
+            import torch
+            from simple_lama_inpainting import SimpleLama
+
+            torch.hub.set_dir(str(paths.models_dir() / "torch_hub"))
+            print("[lama] big-lama.pt")
+            SimpleLama(device=torch.device("cpu"))
+        except ImportError:
+            print("simple-lama-inpainting 이 없습니다: `uv sync --extra lama`")
+            rc = 1
+    if sdxl_fast:
+        from huggingface_hub import hf_hub_download
+
+        print(f"[hf] {cfg['sdxl_lcm_lora_id']}")
+        _snapshot(cfg["sdxl_lcm_lora_id"], allow_patterns=["*.safetensors", "*.json"])
+        print(f"[hf] {cfg['sdxl_lightning_repo']}/{cfg['sdxl_lightning_file']}")
+        hf_hub_download(cfg["sdxl_lightning_repo"], cfg["sdxl_lightning_file"])
+        if not sdxl:
+            print("   (SDXL inpainting 본체는 --sdxl 로 따로 받는다)")
     if da2:
         _snapshot(cfg["da2_large_id"])
     if sdxl:
