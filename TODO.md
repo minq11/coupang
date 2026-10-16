@@ -265,4 +265,5 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 ### 남은 것
 - [ ] Quest 비교: stretch(+범위 제한) vs lama vs sdxl_lightning. 기본값을 opencv 에서 stretch 로 바꿀지 결정.
 - [ ] SHIFTMAP(PatchMatch, opencv-contrib) 은 opencv-python 과 패키지 충돌이라 보류. 필요하면 opencv-contrib-python 으로 교체.
-- [ ] lama / sdxl 가속 변형은 GPU 환경에서 미실행 (코드 경로만 작성). 첫 실행 로그 확인.
+- [x] lama: CPU 에서 실제 사진으로 검증 (2026-10-16). 한 번에 돌리면 마스크 60~75% 타일에서 '질감 죽' → 점진 모드(띠 128px, 추론 512)로 벤치·테이블·차양이 이어짐. 1024 타일 8장 CPU 85초, GPU 는 수 초 예상.
+- [ ] sdxl 가속 변형(lcm/lightning)은 GPU 환경에서 미실행 (코드 경로만 작성). 첫 실행 로그 확인.
