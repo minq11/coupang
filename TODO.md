@@ -253,13 +253,13 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 | 이름 | 파일 | 원리 | 속도(1024 타일) | 프롬프트 |
 |---|---|---|---|---|
 | `stretch` | `inpaint_stretch.py` | 가장자리 픽셀을 바깥으로 늘리고 거리 비례 블러 + 살짝 어둡게. 앰비언트 조명 느낌 | 수십 ms, CPU | 없음 |
-| `lama` | `inpaint_lama.py` | LaMa big-lama (simple-lama-inpainting). 푸리에 합성곱으로 벽·바닥 선을 이음 | ~1초, VRAM 2GB | 없음 |
+| `lama` | `inpaint_lama.py` | LaMa big-lama TorchScript 를 torch 로 직접 로드 (추가 패키지 없음, 가중치 자동 다운로드). 푸리에 합성곱으로 벽·바닥 선을 이음 | ~1초, VRAM 2GB | 없음 |
 | `sdxl_lightning` | `inpaint_sdxl.py` variant | SDXL inpainting + ByteDance Lightning 4-step LoRA, Euler trailing, CFG 없음 | 2~4초 | 있음 |
 | `sdxl_lcm` | `inpaint_sdxl.py` variant | SDXL inpainting + LCM-LoRA 8-step, guidance 1~2 | 3~5초 | 있음 |
 
 - `Inpainter` 에 `MODEL_FREE` / `NEEDS_PROMPT` 클래스 속성 추가. Stage 6 은 `MODEL_FREE` 면 타일 자르기 없이 바로 호출, GUI 는 `NEEDS_PROMPT` 로 프롬프트 입력 표시를 정한다.
 - `registry.INPAINTER_CHOICES` 가 이름·설명·프롬프트 여부의 단일 출처 (GUI 드롭다운 두 곳이 이걸 읽는다).
-- `fetch-models --lama`, `--sdxl-fast`. 설치: `uv sync --extra lama`.
+- `fetch-models --lama`(선택, 첫 실행 때 자동 다운로드), `--sdxl-fast`. simple-lama-inpainting 패키지는 pillow<10·numpy<2 핀이라 쓰지 않는다.
 - `models` 설정: `stretch_sigma_min_frac / max_frac / reach_frac / darken`, `sdxl_lcm_lora_id`, `sdxl_lightning_repo / file`.
 
 ### 남은 것

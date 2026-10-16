@@ -11,6 +11,8 @@ from vr180 import paths
 from vr180.models.stereo_raft import RAFT_STEREO_WEIGHTS, _raft_stereo_dir
 from vr180.pipeline.job import load_default_params
 
+LAMA_HINT = "https://github.com/enesmsahin/simple-lama-inpainting/releases 의 big-lama.pt 를 models/lama/ 에 넣어주세요."
+
 
 def _snapshot(repo: str, **kw) -> None:
     from huggingface_hub import snapshot_download
@@ -71,16 +73,12 @@ def fetch_models(
     cfg = load_default_params()["models"]
     rc = 0
     if lama:
-        # simple-lama 는 첫 생성 때 big-lama.pt 를 torch hub 캐시로 내려받는다 → models/torch_hub 로 고정
-        try:
-            import torch
-            from simple_lama_inpainting import SimpleLama
+        from vr180.models.inpaint_lama import download_lama
 
-            torch.hub.set_dir(str(paths.models_dir() / "torch_hub"))
-            print("[lama] big-lama.pt")
-            SimpleLama(device=torch.device("cpu"))
-        except ImportError:
-            print("simple-lama-inpainting 이 없습니다: `uv sync --extra lama`")
+        try:
+            print(f"[lama] {download_lama()}")
+        except Exception as e:  # noqa: BLE001
+            print(f"LaMa 가중치 다운로드 실패 ({e}). {LAMA_HINT}")
             rc = 1
     if sdxl_fast:
         from huggingface_hub import hf_hub_download

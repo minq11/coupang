@@ -75,7 +75,7 @@ uv run pytest
 
 | 역할 | 기본 (모델 없음) | 모델 |
 |------|------------------|------|
-| 주변부 inpaint | OpenCV Telea, **stretch** (늘리기+블러, 밀리초) | **LaMa** big-lama (~1초, `uv sync --extra lama`), **SDXL Lightning** 4-step / **LCM** 8-step LoRA (2~5초), SDXL inpainting 30-step (10~20초), FLUX.1 Fill dev GGUF Q4 / NF4 (30~60초, **비상업 라이선스**) |
+| 주변부 inpaint | OpenCV Telea, **stretch** (늘리기+블러, 밀리초) | **LaMa** big-lama (~1초, 추가 패키지 없음, 가중치 자동 다운로드), **SDXL Lightning** 4-step / **LCM** 8-step LoRA (2~5초), SDXL inpainting 30-step (10~20초), FLUX.1 Fill dev GGUF Q4 / NF4 (30~60초, **비상업 라이선스**) |
 | stereo disparity | OpenCV SGBM | RAFT-Stereo (middlebury), torchvision RAFT flow |
 | mono depth | stereo 외삽 | Depth Anything V2 Large / Base / Small (Apache-2.0은 Small 만, Base/Large 는 CC-BY-NC-4.0) |
 | FOV 추정 | 수동 | GeoCalib (`uv sync --extra geocalib`) |

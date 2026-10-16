@@ -68,14 +68,36 @@ def test_registry_choices_and_flags():
     st = registry.get_inpainter("stretch", {})
     assert st.MODEL_FREE and not st.NEEDS_PROMPT
     assert st.info().name == "stretch_blur"
-    # lama 는 생성만으로는 import 하지 않는다 (가벼운 객체). 패키지 없으면 load 에서 안내 메시지.
+    # lama 는 생성만으로는 torch 를 import 하지 않는다 (가벼운 객체)
     lm = registry.get_inpainter("lama", {})
     assert lm.info().name == "lama_big" and not lm.NEEDS_PROMPT
-    try:
-        import simple_lama_inpainting  # noqa: F401
-    except ImportError:
-        with pytest.raises(RuntimeError, match="extra lama"):
-            lm.load()
+
+
+def test_lama_pad_and_crop_with_fake_model():
+    """TorchScript 모델 대신 '입력을 그대로 돌려주는' 가짜 모델로 패딩·크롭·마스크 합성 경로를 검증."""
+    torch = pytest.importorskip("torch")
+    from vr180.models.inpaint_lama import LaMaInpainter, _pad_mod8, run_lama
+
+    a = np.zeros((3, 13, 21), np.float32)
+    assert _pad_mod8(a).shape == (3, 16, 24)
+
+    class Fake:
+        def __call__(self, img, msk):
+            return img * (1 - msk) + 0.5 * msk  # 구멍을 회색으로
+
+    rgb = np.full((13, 21, 3), 200, np.uint8)
+    mask = np.zeros((13, 21), np.uint8)
+    mask[3:8, 4:15] = 255
+    out = run_lama(Fake(), rgb, mask, "cpu")
+    assert out.shape == rgb.shape
+    assert (out[mask == 0] == 200).all()
+    assert abs(int(out[5, 8, 0]) - 127) <= 1
+    lm = LaMaInpainter({"device": "cpu"})
+    lm.model = Fake()
+    lm._loaded = True
+    res = lm.inpaint(rgb, mask)
+    assert (res[mask == 0] == 200).all() and abs(int(res[5, 8, 1]) - 127) <= 1
+    del torch
 
 
 def test_sdxl_variant_defaults():

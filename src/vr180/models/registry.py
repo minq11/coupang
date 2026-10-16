@@ -8,7 +8,7 @@ from vr180.models.base import DepthEstimator, FovEstimator, Inpainter, StereoMat
 INPAINTER_CHOICES: list[tuple[str, str, bool]] = [
     ("opencv", "Telea — 모델 없음, 번짐. 뼈대 확인용", False),
     ("stretch", "늘리기+블러 — 모델 없음, 밀리초. 색만 이어짐(앰비언트). 범위 제한과 궁합 최고", False),
-    ("lama", "LaMa — 경량 신경망, ~1초. 벽·바닥 선을 이음. `uv sync --extra lama`", False),
+    ("lama", "LaMa — 경량 신경망, ~1초. 벽·바닥 선을 이음. 첫 실행 때 가중치 200MB 자동 다운로드", False),
     ("sdxl_lightning", "SDXL + Lightning 4-step LoRA — 2~4초. 내용 생성", True),
     ("sdxl_lcm", "SDXL + LCM-LoRA 8-step — 3~5초. 내용 생성", True),
     ("sdxl", "SDXL inpainting 30-step — 10~20초", True),

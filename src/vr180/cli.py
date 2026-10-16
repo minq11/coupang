@@ -205,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument(
         "--lama",
         action="store_true",
-        help="LaMa big-lama 가중치 (inpainter=lama, `uv sync --extra lama` 필요)",
+        help="LaMa big-lama.pt 가중치 (inpainter=lama). 첫 실행 때 자동으로도 받는다",
     )
     f.add_argument(
         "--sdxl-fast", action="store_true", help="SDXL 가속 LoRA 두 개 (inpainter=sdxl_lcm / sdxl_lightning)"
