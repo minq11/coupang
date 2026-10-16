@@ -92,11 +92,29 @@ def test_lama_pad_and_crop_with_fake_model():
     assert out.shape == rgb.shape
     assert (out[mask == 0] == 200).all()
     assert abs(int(out[5, 8, 0]) - 127) <= 1
-    lm = LaMaInpainter({"device": "cpu"})
+    lm = LaMaInpainter({"device": "cpu", "lama_progressive": False})
     lm.model = Fake()
     lm._loaded = True
     res = lm.inpaint(rgb, mask)
     assert (res[mask == 0] == 200).all() and abs(int(res[5, 8, 1]) - 127) <= 1
+    # 점진 모드: 띠 단위로 모두 채워지고 원본은 보존. 가짜 모델이 띠마다 호출되는지 센다.
+    calls = []
+
+    class Counting(Fake):
+        def __call__(self, img, msk):
+            calls.append(float(msk.sum()))
+            return super().__call__(img, msk)
+
+    big = np.full((96, 96, 3), 200, np.uint8)
+    bmask = np.zeros((96, 96), np.uint8)
+    bmask[:, 48:] = 255
+    lp = LaMaInpainter({"device": "cpu", "lama_band_px": 16, "lama_infer_size": 96})
+    lp.model = Counting()
+    lp._loaded = True
+    res2 = lp.inpaint(big, bmask)
+    assert (res2[bmask == 0] == 200).all()
+    assert len(calls) == 3  # 48px 구멍 / 16px 띠
+    assert (np.abs(res2[bmask > 0].astype(int) - 127) <= 2).all()
     del torch
 
 

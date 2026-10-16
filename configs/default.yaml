@@ -104,6 +104,11 @@ models:
   sdxl_lcm_lora_id: latent-consistency/lcm-lora-sdxl          # inpainter=sdxl_lcm
   sdxl_lightning_repo: ByteDance/SDXL-Lightning                # inpainter=sdxl_lightning
   sdxl_lightning_file: sdxl_lightning_4step_lora.safetensors
+  # inpainter=lama 세부. 점진 모드: 경계부터 band_px 폭 띠 단위로 넓혀 가며 채운다 (한 번에 돌리면 질감 죽).
+  lama_progressive: true
+  lama_band_px: 128           # 추론 해상도(lama_infer_size) 기준
+  lama_infer_size: 512        # 타일을 이 크기로 줄여 추론 후 복원
+  lama_max_steps: 16
   # inpainter=stretch (늘리기+블러) 세부. 비율은 타일 긴 변 기준.
   stretch_sigma_min_frac: 0.01
   stretch_sigma_max_frac: 0.08

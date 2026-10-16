@@ -8,6 +8,16 @@ VRAM 약 2GB. 새로운 물체를 '상상' 하지는 못하므로 단순 구조 
 `models/lama/big-lama.pt` 로 자동 다운로드하고, `vr180 fetch-models --lama` 로 미리 받을 수도 있다.
 입력 규약: image [1,3,H,W] float 0..1, mask [1,1,H,W] 0/1 (1 = 채울 곳), H·W 는 8 의 배수(대칭 패딩).
 라이선스: LaMa 코드 Apache-2.0, big-lama 가중치는 원저자(Samsung AI) 배포 조건을 따른다.
+
+점진(progressive) 모드 (기본 켜짐): outpaint 타일은 마스크가 타일의 60~75% 라 한 번에 돌리면 LaMa 가
+무의미한 반복 질감("질감 죽")을 만든다. 그래서 먼저 stretch(늘리기+블러)로 구멍 전체를 그럴듯한 색으로
+채운 placeholder 를 만들고, 원본 경계에서 `lama_band_px` 폭의 띠만 마스크로 주어 LaMa 를 돌린 뒤
+그 띠를 '아는 영역' 으로 승격, 다음 띠로 넓혀 간다. LaMa 는 항상 바로 옆의 진짜/방금 만든 내용을 보며
+채우므로 구조가 이어진다. 추론은 `lama_infer_size`(기본 512) 로 줄여서 하고 결과를 타일 크기로 올린다
+(주변시용이라 충분하고, 띠마다 한 번씩 도는 비용을 1/4 로 줄인다).
+
+파라미터 (models 섹션, 전부 선택): lama_progressive(true) · lama_band_px(128, 추론 해상도 기준) ·
+lama_infer_size(512) · lama_max_steps(16)
 """
 
 from __future__ import annotations
@@ -85,9 +95,14 @@ class LaMaInpainter(Inpainter):
 
     def __init__(self, model_cfg: dict):
         super().__init__(model_cfg)
-        self.device = resolve_device(model_cfg.get("device", "auto"))
+        g = model_cfg.get
+        self.device = resolve_device(g("device", "auto"))
         self.model = None
         self.weights = lama_weights_path()
+        self.progressive = bool(g("lama_progressive", True))
+        self.band_px = int(g("lama_band_px", 128))
+        self.infer_size = int(g("lama_infer_size", 512))
+        self.max_steps = int(g("lama_max_steps", 16))
 
     def _load(self) -> None:
         try:
@@ -108,7 +123,12 @@ class LaMaInpainter(Inpainter):
         self.model = None
 
     def info(self) -> ModelInfo:
-        return ModelInfo(name="lama_big", weights=str(self.weights), device=self.device)
+        return ModelInfo(
+            name="lama_big",
+            weights=str(self.weights),
+            device=self.device,
+            extra={"progressive": self.progressive, "band_px": self.band_px, "infer_size": self.infer_size},
+        )
 
     def inpaint(self, rgb, mask, prompt="", negative_prompt="", seed=0, steps=30, guidance=7.0, strength=1.0):
         self.load()
@@ -116,8 +136,48 @@ class LaMaInpainter(Inpainter):
         m = (np.asarray(mask) > 127).astype(np.uint8) * 255
         if m.max() == 0:
             return rgb.copy()
-        out = run_lama(self.model, rgb, m, self.device)
+        if not self.progressive:
+            out = run_lama(self.model, rgb, m, self.device)
+        else:
+            out = self._progressive(rgb, m)
         result = rgb.copy()
         sel = m > 0
         result[sel] = out[sel]
         return result
+
+    def _progressive(self, rgb: np.ndarray, m: np.ndarray) -> np.ndarray:
+        import cv2
+
+        from vr180.models.inpaint_stretch import StretchBlurInpainter
+
+        h, w = rgb.shape[:2]
+        # 1) placeholder: 구멍 전체를 stretch 로 그럴듯한 색으로 채운다 (LaMa 가 '아는 영역' 으로 볼 배경)
+        cur = StretchBlurInpainter(self.cfg).inpaint(rgb, m)
+        # 2) 추론 해상도로 축소
+        scale = min(1.0, self.infer_size / float(max(h, w)))
+        if scale < 1.0:
+            sw, sh = max(16, int(round(w * scale))), max(16, int(round(h * scale)))
+            cur_s = cv2.resize(cur, (sw, sh), interpolation=cv2.INTER_AREA)
+            hole_s = cv2.resize(m, (sw, sh), interpolation=cv2.INTER_NEAREST) > 127
+        else:
+            cur_s, hole_s = cur.copy(), m > 127
+        dist = cv2.distanceTransform(hole_s.astype(np.uint8), cv2.DIST_L2, 5)
+        remaining = hole_s.copy()
+        step = 0
+        while remaining.any() and step < self.max_steps:
+            band = remaining & (dist <= float(self.band_px) * (step + 1))
+            if not band.any():
+                break
+            out_s = run_lama(self.model, cur_s, band.astype(np.uint8) * 255, self.device)
+            cur_s[band] = out_s[band]
+            remaining &= ~band
+            step += 1
+            if getattr(self, "ctx", None) is not None:
+                self.ctx.check_cancelled()
+        if remaining.any():  # max_steps 에 걸린 나머지는 한 번에
+            out_s = run_lama(self.model, cur_s, remaining.astype(np.uint8) * 255, self.device)
+            cur_s[remaining] = out_s[remaining]
+        # 3) 타일 크기로 복원
+        if scale < 1.0:
+            return cv2.resize(cur_s, (w, h), interpolation=cv2.INTER_CUBIC)
+        return cur_s
