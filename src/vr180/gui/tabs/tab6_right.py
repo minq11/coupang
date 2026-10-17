@@ -36,7 +36,7 @@ def build(shared):
                     INPAINTER_NAMES,
                     value="opencv",
                     label="큰 구멍 inpainter",
-                    info="hole_px 초과 구멍을 메울 모델. opencv/stretch=모델 없음 (기본), lama=빠른 구조 복원, sdxl*/flux=디테일 생성. "
+                    info="hole_px 초과 구멍을 메울 모델. opencv/stretch=모델 없음 (기본), lama=빠른 구조 복원, sdxl_lightning/sdxl_lcm=디테일 생성. "
                     "Stage 3 outpainter 와 별개.",
                     elem_classes=["vr180-tip"],
                 )

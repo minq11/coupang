@@ -1,11 +1,11 @@
 """CLI: python -m vr180 <command>. GUI 는 같은 함수를 부른다.
 
-vr180 run --input x.png [--job ID] [--from-stage N] [--to-stage N] [--set stage_03_outpaint.inpainter=sdxl ...]
+vr180 run --input x.png [--job ID] [--from-stage N] [--to-stage N] [--set stage_03_outpaint.inpainter=sdxl_lightning ...]
 vr180 status --job ID
 vr180 jobs
 vr180 gui [--port 7860]
 vr180 make-sample samples/synthetic_sbs.png
-vr180 fetch-models [--sdxl] [--sdxl-fast] [--lama] [--da2] [--flux] [--raft-stereo] [--vda] [--all]
+vr180 fetch-models [--sdxl] [--lama] [--da2] [--raft-stereo] [--vda] [--all]
 """
 
 from __future__ import annotations
@@ -111,12 +111,10 @@ def cmd_fetch_models(a) -> int:
     return fetch_models(
         sdxl=a.sdxl or a.all,
         da2=a.da2 or a.all,
-        flux=a.flux or a.all,
         raft_stereo=a.raft_stereo or a.all,
         raft_flow=a.raft_flow or a.all,
         vda=a.vda or a.all,
         lama=a.lama or a.all,
-        sdxl_fast=a.sdxl_fast or a.all,
     )
 
 
@@ -194,9 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(fn=cmd_make_sample)
 
     f = sub.add_parser("fetch-models", help="모델 가중치 내려받기 (models/ 아래)")
-    f.add_argument("--sdxl", action="store_true")
+    f.add_argument(
+        "--sdxl",
+        action="store_true",
+        help="SDXL inpainting 본체 + Lightning/LCM LoRA (inpainter=sdxl_lightning / sdxl_lcm). 첫 실행 때 자동으로도 받는다",
+    )
     f.add_argument("--da2", action="store_true")
-    f.add_argument("--flux", action="store_true")
     f.add_argument("--raft-stereo", action="store_true")
     f.add_argument("--raft-flow", action="store_true")
     f.add_argument(
@@ -206,9 +207,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--lama",
         action="store_true",
         help="LaMa big-lama.pt 가중치 (inpainter=lama). 첫 실행 때 자동으로도 받는다",
-    )
-    f.add_argument(
-        "--sdxl-fast", action="store_true", help="SDXL 가속 LoRA 두 개 (inpainter=sdxl_lcm / sdxl_lightning)"
     )
     f.add_argument("--all", action="store_true")
     f.set_defaults(fn=cmd_fetch_models)

@@ -171,6 +171,25 @@ def run(job, params: dict, ctx) -> dict:
         )
         rgb[empty_inside] = filled[empty_inside]
         pano[..., :3] = rgb
+    # 사진 경계 페더: 원본 사진은 0/1 valid 마스크로 들어와 채운 영역과 딱 붙는다 (계단 + 이음선).
+    # 경계 안쪽 photo_edge_blend_deg 만큼은 사진 → 주변(저주파) 으로 서서히 넘어가게 섞는다.
+    edge_deg = float(params.get("photo_edge_blend_deg", 3.0))
+    valid_path = job.path(2, "valid_mask.png")
+    if edge_deg > 0 and valid_path.exists():
+        valid = imageio.read_mask(valid_path) > 127
+        deg_px = 180.0 / size
+        blend_px = max(edge_deg / deg_px, 2.0)
+        dist_in = cv2.distanceTransform(valid.astype(np.uint8), cv2.DIST_L2, 5)
+        w_edge = np.clip(dist_in / blend_px, 0.0, 1.0).astype(np.float32)
+        w_edge[~valid] = 0.0
+        rgb = pano[..., :3].astype(np.float32)
+        # 주변 색: 합성 결과를 경계 폭만큼 흐린 것 (사진 밖 채움과 사진 안 색이 섞인 저주파)
+        surround = cv2.GaussianBlur(rgb, (0, 0), sigmaX=max(blend_px / 2.0, 1.0))
+        band = valid & (w_edge < 1.0)
+        rgb[band] = rgb[band] * w_edge[band][:, None] + surround[band] * (1.0 - w_edge[band][:, None])
+        pano[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+        ctx.log(f"사진 경계 페더 {edge_deg:.1f}° ({blend_px:.0f}px)")
+
     # extent 페이드 블렌드: rgb = gen × w + color × (1 − w). 바깥 (w == 0) 은 color.
     color = np.asarray(extent_color, dtype=np.float32).reshape(1, 1, 3)
     w3 = extent_w[..., None]

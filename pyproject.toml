@@ -19,11 +19,11 @@ dependencies = [
     "torch>=2.4,<2.8",
     "torchvision>=0.19,<0.23",
     "diffusers>=0.32",
+    "peft>=0.13",            # diffusers load_lora_weights (sdxl_lcm / sdxl_lightning LoRA)
     "transformers>=4.46",
     "accelerate>=1.0",
     "safetensors>=0.4",
     "huggingface-hub>=0.26",
-    "gguf>=0.10",
     "sentencepiece>=0.2",
     "protobuf>=4.25",
     # RAFT-Stereo (third_party clone) 가 필요로 하는 transitive deps
@@ -32,8 +32,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# FLUX NF4 양자화 (GGUF 대신 쓸 때). Windows 휠은 bitsandbytes>=0.43.2 부터.
-nf4 = ["bitsandbytes>=0.43.2"]
 # Stage 1 자동 FOV 추정
 geocalib = ["geocalib @ git+https://github.com/cvg/GeoCalib.git"]
 # Stage 0 특징점 매칭 대안

@@ -35,13 +35,13 @@ stage_02_reproj:
   tile_min_new_fraction: 0.01   # Stage 3: 새로 채울 픽셀이 이 비율 미만이면 타일 생략.
 
 stage_03_outpaint:
-  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm | sdxl | flux
-                          # 빠른 순. opencv/stretch 는 모델 없음, lama 는 경량 신경망(프롬프트 없음), 나머지는 확산 모델
+  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm
+                          # 빠른 순. opencv/stretch 는 모델 없음, lama 는 경량 신경망(프롬프트 없음), sdxl_* 는 SDXL inpainting + 가속 LoRA
   prompt: "indoor scene, natural lighting, photorealistic, consistent perspective"
   negative_prompt: "text, watermark, people, blurry, distorted"
   seed: 42
-  steps: 30
-  guidance: 30.0        # FLUX 는 30 근처, SDXL 는 7 근처 권장
+  steps: 30               # sdxl_lightning/lcm 은 12 초과 값을 변형 기본값(4 / 8)으로 자동 치환. 12 이하면 그대로 사용
+  guidance: 7.0           # sdxl_lightning 은 항상 0 (CFG 없음). sdxl_lcm 은 2.5 초과면 1.5 로, 아니면 1~2 로 클립
   tile_res: 1024          # 타일 해상도 (고정 권장)
   tile_fov_deg: 90.0
   tile_yaws_deg: [-60, 0, 60]
@@ -82,7 +82,7 @@ stage_05_depth:
 
 stage_06_right:
   hole_px: 400            # 이 면적(px²) 이하 구멍은 Telea, 초과는 inpaint 모델
-  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm | sdxl | flux
+  inpainter: opencv       # opencv | stretch | lama | sdxl_lightning | sdxl_lcm (Stage 3 과 별개, 큰 구멍 전용)
   blend_deg: 8.0
   splat_taps: 2           # 1 | 2  (2 면 양 옆 픽셀에도 splat 해서 균열 감소)
   mono_symmetric: true    # mono 모드: true 면 가운데 뷰를 양쪽으로 ±d/2 워핑 (기본).
@@ -96,6 +96,8 @@ stage_07_output:
 
 video:
   depth_model: da2_video  # vda_large | vda_small | da2_video | none
+  edge_blend_deg: 1.0     # 원본 영역 경계에서 프레임 → 고정 주변부로 섞는 폭(°). 원본 안쪽으로 이만큼만 침범.
+                          # 0 = 경계에서 바로 전환. 예전 기본(stage_06_right.blend_deg=8) 은 원본이 8° 흐려졌다.
   chunk: 32               # VDA chunk 크기
   overlap: 8              # VDA chunk 겹침
 
@@ -114,10 +116,6 @@ models:
   stretch_sigma_max_frac: 0.08
   stretch_reach_frac: 0.5
   stretch_darken: 0.15
-  flux_fill_id: black-forest-labs/FLUX.1-Fill-dev
-  flux_fill_gguf_repo: YarvixPA/FLUX.1-Fill-dev-GGUF
-  flux_fill_gguf_file: flux1-fill-dev-Q4_K_S.gguf
-  flux_quant: gguf        # gguf | nf4 | none
   da2_large_id: depth-anything/Depth-Anything-V2-Large-hf
   da2_base_id: depth-anything/Depth-Anything-V2-Base-hf
   da2_small_id: depth-anything/Depth-Anything-V2-Small-hf

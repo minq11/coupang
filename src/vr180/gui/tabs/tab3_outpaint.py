@@ -72,13 +72,13 @@ def build(shared):
                 steps = gr.Slider(
                     1, 60, value=30, step=1,
                     label="steps",
-                    info="디노이즈 단계 수. 많을수록 품질↑ 속도↓. SDXL 30, FLUX 20~30 권장.",
+                    info="디노이즈 단계 수. 12 초과면 변형 기본값(lightning 4 / lcm 8)으로 자동 치환. 12 이하는 그대로 사용.",
                     elem_classes=["vr180-tip"],
                 )
                 guidance = gr.Slider(
-                    0, 40, value=30.0, step=0.5,
+                    0, 40, value=7.0, step=0.5,
                     label="guidance",
-                    info="프롬프트 반영 강도. FLUX 는 30 근처, SDXL 는 7 근처 권장.",
+                    info="프롬프트 반영 강도. lightning 은 항상 0 (CFG 없음). lcm 은 1~2 범위만 유효, 2.5 초과면 1.5 로.",
                     elem_classes=["vr180-tip"],
                 )
             with gr.Row():

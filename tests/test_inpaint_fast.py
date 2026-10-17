@@ -1,4 +1,4 @@
-"""모델 없는 빠른 inpainter (stretch) 와 registry 메타데이터 테스트."""
+"""모델 없는 빠른 inpainter (stretch), registry 메타데이터, SDXL 변형 기본값 테스트."""
 
 import numpy as np
 import pytest
@@ -59,18 +59,22 @@ def test_stretch_no_mask_is_identity_and_darken_zero():
 
 
 def test_registry_choices_and_flags():
-    names = registry.INPAINTER_NAMES
-    for n in ("opencv", "stretch", "lama", "sdxl_lightning", "sdxl_lcm", "sdxl", "flux"):
-        assert n in names
-    assert registry.inpainter_needs_prompt("stretch") is False
+    # 옵션은 이 다섯 개 (sdxl base / flux 는 제거됨)
+    assert registry.INPAINTER_NAMES == ["opencv", "stretch", "lama", "sdxl_lightning", "sdxl_lcm"]
     assert registry.inpainter_needs_prompt("lama") is False
+    assert registry.inpainter_needs_prompt("stretch") is False
+    assert registry.inpainter_needs_prompt("opencv") is False
     assert registry.inpainter_needs_prompt("sdxl_lcm") is True
+    assert registry.inpainter_needs_prompt("sdxl_lightning") is True
     st = registry.get_inpainter("stretch", {})
     assert st.MODEL_FREE and not st.NEEDS_PROMPT
     assert st.info().name == "stretch_blur"
     # lama 는 생성만으로는 torch 를 import 하지 않는다 (가벼운 객체)
     lm = registry.get_inpainter("lama", {})
     assert lm.info().name == "lama_big" and not lm.NEEDS_PROMPT
+    for gone in ("sdxl", "flux"):
+        with pytest.raises(ValueError):
+            registry.get_inpainter(gone, {})
 
 
 def test_lama_pad_and_crop_with_fake_model():
@@ -121,16 +125,18 @@ def test_lama_pad_and_crop_with_fake_model():
 def test_sdxl_variant_defaults():
     from vr180.models.inpaint_sdxl import SDXLInpainter
 
-    base = SDXLInpainter({}, "base")
-    assert base._effective_steps_guidance(30, 7.0) == (30, 7.0)
+    # 생성만으로는 torch/diffusers 를 import 하지 않는다 (가벼운 객체)
     lcm = SDXLInpainter({}, "lcm")
+    assert lcm.info().name == "sdxl_inpaint_lcm" and lcm.NEEDS_PROMPT
     assert lcm._effective_steps_guidance(30, 7.0) == (8, 1.5)
     assert lcm._effective_steps_guidance(6, 1.2) == (6, 1.2)
     lt = SDXLInpainter({}, "lightning")
     assert lt._effective_steps_guidance(30, 7.0) == (4, 0.0)
     assert lt.info().name == "sdxl_inpaint_lightning"
-    with pytest.raises(ValueError):
-        SDXLInpainter({}, "turbo")
+    assert lt._effective_steps_guidance(6, 3.0) == (6, 0.0)
+    for bad in ("base", "turbo"):
+        with pytest.raises(ValueError):
+            SDXLInpainter({}, bad)
 
 
 def test_end_to_end_with_stretch(work_dir, sample_mono, small_params_mono):

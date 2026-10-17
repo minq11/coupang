@@ -1,7 +1,7 @@
 """영상 변환 탭 — vr180 video 를 GUI 로. 사진과 별개 흐름이라 모듈 분리.
 
 흐름: 영상 업로드 → ffprobe 로 duration 획득 → 기준 프레임 시각 슬라이더 → 프리뷰 (ffmpeg -ss)
-     → 주요 옵션 (hfov/pitch/size/extent/depth_model/CRF) → '변환 시작' → 로그·진행률 스트리밍
+     → 주요 옵션 (hfov/pitch/size/extent/inpainter·프롬프트/depth_model/CRF) → '변환 시작' → 로그·진행률 스트리밍
      → 출력 영상 미리보기 (gr.Video).
 """
 
@@ -14,6 +14,7 @@ import gradio as gr
 
 from vr180 import paths
 from vr180.gui import common as C
+from vr180.models.registry import INPAINTER_CHOICES, INPAINTER_NAMES, inpainter_needs_prompt
 from vr180.util import imageio
 
 
@@ -23,8 +24,9 @@ def _probe(video_path: str) -> dict:
     return probe(Path(video_path))
 
 
-def _ref_thumbnail(video_path: str | None, time_sec: float, max_side: int = 640):
-    """지정 시각의 1프레임을 PNG 로 뽑아 다운샘플 numpy 로 돌려준다."""
+def _ref_raw(video_path: str | None, time_sec: float, mode: str, max_side: int = 640):
+    """지정 시각의 1프레임을 PNG 로 뽑아 다운샘플 numpy 로. sbs 모드면 좌반만 쓴다
+    (파이프라인이 Stage 0 에서 split 하므로 가늠자도 좌반 기준이어야 맞다)."""
     if not video_path:
         return None
     from vr180.video.frames import extract_frame_png
@@ -35,6 +37,8 @@ def _ref_thumbnail(video_path: str | None, time_sec: float, max_side: int = 640)
     except Exception:  # noqa: BLE001
         return None
     img = imageio.read_rgba(tmp)[..., :3]
+    if mode == "sbs":
+        img = img[:, : img.shape[1] // 2]
     return imageio.downscale_for_preview(img, max_side)
 
 
@@ -47,6 +51,8 @@ def _default_output_path(input_video: str, mode: str) -> str:
 
 def build() -> None:
     """영상 탭의 모든 위젯·이벤트. 상위 Blocks 안쪽에서 호출된다 (gr.Tab 안)."""
+    ref_raw_state = gr.State(None)  # 가늠자 재렌더용 raw ref frame (sbs 는 좌반)
+
     gr.Markdown("### 🎞 영상 → VR180 SBS 변환 (고정 샷 전용)")
     gr.Markdown(
         "입력 영상을 올리면 길이·fps 를 읽어와 기준 프레임을 선택합니다. "
@@ -86,7 +92,10 @@ def build() -> None:
             info="주변부 생성에 쓸 프레임. 피사체가 가장 가운데/선명한 지점이 유리.",
             elem_classes=["vr180-tip"],
         )
-        ref_thumb = gr.Image(label="기준 프레임 미리보기", type="numpy", interactive=False, height=240)
+        ref_thumb = gr.Image(
+            label="기준 프레임 미리보기 — 노란 가로선이 '현재 pitch 가 가리키는 세로 위치'",
+            type="numpy", interactive=False, height=240,
+        )
 
     with gr.Group():
         gr.Markdown("### 🎛 주요 옵션 (기준 프레임 처리에 적용)")
@@ -107,6 +116,28 @@ def build() -> None:
             ext_h = gr.Number(value=180, label="extent_h_deg", elem_classes=["vr180-tip"])
             ext_v = gr.Number(value=180, label="extent_v_deg", elem_classes=["vr180-tip"])
             fade = gr.Slider(0, 30, value=10, step=0.5, label="fade °", elem_classes=["vr180-tip"])
+            edge_blend = gr.Slider(
+                0, 8, value=1.0, step=0.5,
+                label="경계 블렌딩 °",
+                info="원본 영역 가장자리에서 주변부와 섞는 폭. 원본 안쪽으로 이만큼만 침범 (0 = 바로 전환).",
+                elem_classes=["vr180-tip"],
+            )
+        with gr.Row():
+            inpainter = gr.Dropdown(
+                INPAINTER_NAMES,
+                value="opencv",
+                label="주변부 inpainter (기준 프레임 1회)",
+                info=" · ".join(f"{n}={d}" for n, d, _ in INPAINTER_CHOICES),
+                elem_classes=["vr180-tip"],
+            )
+            # 프롬프트는 sdxl_* 일 때만 표시 (opencv/stretch 는 프롬프트 안 씀). inpainter.change 로 토글.
+            prompt = gr.Textbox(
+                label="프롬프트 (sdxl_lightning / sdxl_lcm 전용)",
+                lines=2,
+                info="장면 묘사: 실내/실외, 조명, 바닥·천장 재질. 비워 두면 default.yaml 의 기본 프롬프트 사용.",
+                elem_classes=["vr180-tip"],
+                visible=False,
+            )
         with gr.Row():
             depth_model = gr.Dropdown(
                 ["vda_large", "vda_small", "da2_video", "none"],
@@ -134,54 +165,75 @@ def build() -> None:
     progress = gr.Markdown("")
 
     # ───── 이벤트
-    def on_upload(f, cur_mode):
+    def on_upload(f, cur_mode, hfov_v, pitch_v):
         if not f:
-            return gr.update(), "_영상을 올리세요._", gr.update(), None, gr.update()
+            return gr.update(), "_영상을 올리세요._", gr.update(), None, None, gr.update()
         try:
             info = _probe(f)
         except Exception as e:  # noqa: BLE001
             return (
-                gr.update(),
-                f"⚠️ 영상 정보 읽기 실패: {e}",
-                gr.update(),
-                None,
-                gr.update(),
+                gr.update(), f"⚠️ 영상 정보 읽기 실패: {e}",
+                gr.update(), None, None, gr.update(),
             )
         dur = max(info["duration"], 0.1)
         md = (
             f"✅ **{Path(f).name}** · {info['width']}×{info['height']} · "
             f"{info['fps']:.2f}fps · {dur:.2f}s ({info['nb_frames']} 프레임)"
         )
-        thumb = _ref_thumbnail(f, 0.0)
+        raw = _ref_raw(f, 0.0, cur_mode)
+        thumb = C.draw_pitch_guide(raw, hfov_v, pitch_v)
         out = _default_output_path(f, cur_mode)
         return (
             gr.update(maximum=dur, value=0.0),
             md,
             gr.update(value=out),
             thumb,
+            raw,
             gr.update(),
         )
 
     upload.upload(
         on_upload,
-        [upload, mode],
-        [ref_slider, info_md, output_path, ref_thumb, output_preview],
+        [upload, mode, hfov, pitch],
+        [ref_slider, info_md, output_path, ref_thumb, ref_raw_state, output_preview],
     )
 
-    def on_ref_change(f, t):
-        return _ref_thumbnail(f, float(t)) if f else None
-
-    ref_slider.change(on_ref_change, [upload, ref_slider], [ref_thumb])
-
-    def on_mode_change(cur_mode, f):
+    def on_ref_change(f, t, cur_mode, hfov_v, pitch_v):
+        """시각 바뀌면 새 raw 추출 + 가늠자 다시 그림."""
         if not f:
-            return gr.update()
-        return gr.update(value=_default_output_path(f, cur_mode))
+            return None, None
+        raw = _ref_raw(f, float(t), cur_mode)
+        return C.draw_pitch_guide(raw, hfov_v, pitch_v), raw
 
-    mode.change(on_mode_change, [mode, upload], [output_path])
+    ref_slider.change(
+        on_ref_change,
+        [upload, ref_slider, mode, hfov, pitch],
+        [ref_thumb, ref_raw_state],
+    )
 
-    def run_video(f, m, t, out_p, hfov_v, pitch_v, size_v, eh, ev, fade_v,
-                  dm_v, codec_v, crf_v, check_motion_v):
+    def redraw_guide(raw, hfov_v, pitch_v):
+        return C.draw_pitch_guide(raw, hfov_v, pitch_v) if raw is not None else None
+
+    hfov.change(redraw_guide, [ref_raw_state, hfov, pitch], [ref_thumb])
+    pitch.change(redraw_guide, [ref_raw_state, hfov, pitch], [ref_thumb])
+    inpainter.change(lambda v: gr.update(visible=inpainter_needs_prompt(v)), [inpainter], [prompt])
+
+    def on_mode_change(cur_mode, f, t, hfov_v, pitch_v):
+        """mode 바뀌면 (sbs → mono 혹은 반대) raw 를 재추출: sbs 는 좌반만 쓰기 때문."""
+        if not f:
+            return gr.update(), None, None
+        raw = _ref_raw(f, float(t), cur_mode)
+        thumb = C.draw_pitch_guide(raw, hfov_v, pitch_v)
+        return gr.update(value=_default_output_path(f, cur_mode)), thumb, raw
+
+    mode.change(
+        on_mode_change,
+        [mode, upload, ref_slider, hfov, pitch],
+        [output_path, ref_thumb, ref_raw_state],
+    )
+
+    def run_video(f, m, t, out_p, hfov_v, pitch_v, size_v, eh, ev, fade_v, edge_blend_v,
+                  inpainter_v, prompt_v, dm_v, codec_v, crf_v, check_motion_v):
         if not f:
             raise gr.Error("입력 영상을 올리세요")
         if not out_p:
@@ -196,7 +248,13 @@ def build() -> None:
                 "extent_v_deg": float(ev),
                 "extent_fade_deg": float(fade_v),
             },
+            # 사진 플로우와 동일하게 Stage 3 주변부 inpainter 만 바꾼다 (Stage 6 큰 구멍은 default.yaml 값).
+            "stage_03_outpaint": {"inpainter": inpainter_v},
+            # 프레임 루프 전용: 원본 영역 경계에서 고정 주변부와 섞는 폭 (surround Job 재사용 때도 적용).
+            "video": {"edge_blend_deg": float(edge_blend_v)},
         }
+        if (prompt_v or "").strip():
+            params_override["stage_03_outpaint"]["prompt"] = prompt_v.strip()
         yield from C.run_video_stream(
             input_video=f,
             output_video=out_p,
@@ -211,7 +269,7 @@ def build() -> None:
 
     run_btn.click(
         run_video,
-        [upload, mode, ref_slider, output_path, hfov, pitch, size, ext_h, ext_v, fade,
-         depth_model, codec, crf, check_motion],
+        [upload, mode, ref_slider, output_path, hfov, pitch, size, ext_h, ext_v, fade, edge_blend,
+         inpainter, prompt, depth_model, codec, crf, check_motion],
         [log_brief, log_full, progress, output_preview],
     )

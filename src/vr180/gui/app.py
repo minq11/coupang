@@ -21,6 +21,7 @@ from vr180.gui.tabs import (
     tab7_output,
 )
 from vr180.models.registry import INPAINTER_CHOICES, INPAINTER_NAMES, inpainter_needs_prompt
+from vr180.pipeline.job import load_default_params
 
 TABS = [tab0_input, tab1_fov, tab2_reproj, tab3_outpaint, tab4_stereo, tab5_depth, tab6_right, tab7_output]
 
@@ -174,7 +175,7 @@ def _build_photo() -> None:
                 )
             # 프롬프트는 opencv 일 때 숨김 (opencv Telea 는 프롬프트 안 씀). inpainter.change 로 토글.
             prompt = gr.Textbox(
-                label="프롬프트 (sdxl/flux 전용)",
+                label="프롬프트 (sdxl_lightning / sdxl_lcm 전용)",
                 lines=2,
                 info="장면 묘사: 실내/실외, 조명, 바닥·천장 재질. 비워 두면 default.yaml 의 기본 프롬프트 사용.",
                 elem_classes=["vr180-tip"],
@@ -335,8 +336,10 @@ def _build_photo() -> None:
                     "extent_fade_deg": float(fade_v),
                 }
             )
+            # 프롬프트를 비우면 default.yaml 기본 프롬프트로 되돌린다 (None 을 넣으면 "None" 문자열이 모델에 들어감).
+            default_prompt = str(load_default_params()["stage_03_outpaint"].get("prompt", ""))
             param_updates.setdefault(3, {}).update(
-                {"inpainter": inpainter_v, "prompt": (prompt_v or "").strip() or None}
+                {"inpainter": inpainter_v, "prompt": (prompt_v or "").strip() or default_prompt}
             )
             param_updates.setdefault(5, {}).update(
                 {"estimator": estimator_v, "depth_strength": float(depth_s_v)}
@@ -358,9 +361,27 @@ def _build_photo() -> None:
         ).then(load_all, [job_id], all_outputs)
 
 
+def _find_free_port(start: int, span: int = 20) -> int:
+    """[start, start+span) 범위에서 bind 가능한 첫 포트. 전부 점유되면 start 그대로 반환
+    (호출측이 OSError 로 터뜨리게 둠)."""
+    import socket
+
+    for p in range(start, start + span):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+            except OSError:
+                continue
+            return p
+    return start
+
+
 def launch(port: int | None = None, share: bool = False) -> None:
     os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")  # 외부 호출 없음
-    port = port or int(os.environ.get("VR180_GUI_PORT", "7860"))
+    requested = port or int(os.environ.get("VR180_GUI_PORT", "7860"))
+    actual = _find_free_port(requested)
+    if actual != requested:
+        print(f"[VR180] 포트 {requested} 이 사용 중 — {actual} 로 폴백")
     demo = build()
     demo.queue(default_concurrency_limit=1)
-    demo.launch(server_name="127.0.0.1", server_port=port, share=share, inbrowser=True, show_error=True)
+    demo.launch(server_name="127.0.0.1", server_port=actual, share=share, inbrowser=True, show_error=True)

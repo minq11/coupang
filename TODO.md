@@ -190,6 +190,7 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 - `tests/test_video.py`: 합성 SBS 프레임 10장을 ffmpeg 로 묶어 입력 → 출력 영상의 프레임 수·해상도 일치, 첫 프레임의 원본 영역이 입력과 일치(PSNR > 40), 바깥 영역이 surround 와 일치.
 - ffmpeg 없으면 테스트 skip.
 - Quest 체크: 경계에서 원본과 주변부 밝기 차이로 깜빡임이 없는지(노출 변동이 있는 영상은 경계 블렌딩 폭을 넓힌다), 재생이 끊기지 않는지.
+- 경계 블렌딩 폭은 `video.edge_blend_deg` (기본 1.0°, GUI 영상 탭 '경계 블렌딩 °'). 2026-10-17 까지는 `stage_06_right.blend_deg`(8°) 를 그대로 써서 원본 안쪽 8° 가 고정 기준 프레임과 섞여 움직이는 물체가 경계에서 고스트/흐림으로 보였다. 1° 로 줄이자 1~8° 띠의 원본 대비 오차가 코덱 노이즈 수준(2.1~2.9 → 1.35)으로 내려감.
 
 ### 순서
 1. 1번(범위 제한) 먼저. 영상에서 주변부가 작을수록 생성 품질·시간 모두 유리하다.
@@ -244,7 +245,7 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 
 ---
 
-## 5. 빠른 주변부 채우기 3종 — 구현됨 (`inpainter=stretch | lama | sdxl_lightning | sdxl_lcm`)
+## 5. 빠른 주변부 채우기 — 구현됨. 옵션은 `opencv | stretch | lama | sdxl_lightning | sdxl_lcm` 다섯 개 (2026-10-16: sdxl 30-step / flux 제거, lama 는 한 번 뺐다가 복귀)
 
 ### 왜
 - 주변부는 주변시로 보는 영역이라 선명도보다 색·밝기·대략적 구조의 연속성이 중요하다. FLUX(30~60초/타일) 와 Telea(번짐) 사이에 빠른 선택지가 없었다.
@@ -253,17 +254,18 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 | 이름 | 파일 | 원리 | 속도(1024 타일) | 프롬프트 |
 |---|---|---|---|---|
 | `stretch` | `inpaint_stretch.py` | 가장자리 픽셀을 바깥으로 늘리고 거리 비례 블러 + 살짝 어둡게. 앰비언트 조명 느낌 | 수십 ms, CPU | 없음 |
-| `lama` | `inpaint_lama.py` | LaMa big-lama TorchScript 를 torch 로 직접 로드 (추가 패키지 없음, 가중치 자동 다운로드). 푸리에 합성곱으로 벽·바닥 선을 이음 | ~1초, VRAM 2GB | 없음 |
+| `lama` | `inpaint_lama.py` | LaMa big-lama TorchScript 를 torch 로 직접 로드 (추가 패키지 없음, 가중치 자동 다운로드). 푸리에 합성곱으로 벽·바닥 선을 이음. 점진 모드 기본 | ~1초, VRAM 2GB | 없음 |
 | `sdxl_lightning` | `inpaint_sdxl.py` variant | SDXL inpainting + ByteDance Lightning 4-step LoRA, Euler trailing, CFG 없음 | 2~4초 | 있음 |
 | `sdxl_lcm` | `inpaint_sdxl.py` variant | SDXL inpainting + LCM-LoRA 8-step, guidance 1~2 | 3~5초 | 있음 |
 
 - `Inpainter` 에 `MODEL_FREE` / `NEEDS_PROMPT` 클래스 속성 추가. Stage 6 은 `MODEL_FREE` 면 타일 자르기 없이 바로 호출, GUI 는 `NEEDS_PROMPT` 로 프롬프트 입력 표시를 정한다.
 - `registry.INPAINTER_CHOICES` 가 이름·설명·프롬프트 여부의 단일 출처 (GUI 드롭다운 두 곳이 이걸 읽는다).
-- `fetch-models --lama`(선택, 첫 실행 때 자동 다운로드), `--sdxl-fast`. simple-lama-inpainting 패키지는 pillow<10·numpy<2 핀이라 쓰지 않는다.
-- `models` 설정: `stretch_sigma_min_frac / max_frac / reach_frac / darken`, `sdxl_lcm_lora_id`, `sdxl_lightning_repo / file`.
+- `fetch-models --sdxl` 가 본체 + LoRA 두 개를 함께 받는다 (`--sdxl-fast`, `--flux` 제거). `--lama` 는 선택(첫 실행 때 자동 다운로드). `load_lora_weights` 는 `peft` 가 필요해 의존성에 추가. simple-lama-inpainting 패키지는 pillow<10·numpy<2 핀이라 쓰지 않는다.
+- 영상 탭에도 같은 inpainter 드롭다운 + 프롬프트가 있다 (기준 프레임 surround job 의 Stage 3 에만 적용, Stage 6 큰 구멍은 default.yaml).
+- `models` 설정: `stretch_sigma_min_frac / max_frac / reach_frac / darken`, `lama_progressive / band_px / infer_size / max_steps`, `sdxl_lcm_lora_id`, `sdxl_lightning_repo / file`.
 
 ### 남은 것
-- [ ] Quest 비교: stretch(+범위 제한) vs lama vs sdxl_lightning. 기본값을 opencv 에서 stretch 로 바꿀지 결정.
+- [ ] Quest 비교: stretch(+범위 제한) vs lama vs sdxl_lightning vs sdxl_lcm. 기본값을 opencv 에서 stretch 로 바꿀지 결정.
 - [ ] SHIFTMAP(PatchMatch, opencv-contrib) 은 opencv-python 과 패키지 충돌이라 보류. 필요하면 opencv-contrib-python 으로 교체.
-- [x] lama: CPU 에서 실제 사진으로 검증 (2026-10-16). 한 번에 돌리면 마스크 60~75% 타일에서 '질감 죽' → 점진 모드(띠 128px, 추론 512)로 벤치·테이블·차양이 이어짐. 1024 타일 8장 CPU 85초, GPU 는 수 초 예상.
-- [ ] sdxl 가속 변형(lcm/lightning)은 GPU 환경에서 미실행 (코드 경로만 작성). 첫 실행 로그 확인.
+- [x] lama: CPU 에서 실제 사진으로 검증 (2026-10-16). 한 번에 돌리면 마스크 60~75% 타일에서 '질감 죽' → 점진 모드(띠 128px, 추론 512)로 벤치·테이블·차양이 이어짐. 1024 타일 8장 CPU 85초, GPU 는 수 초 예상. 옵션 정리 때 한 번 뺐다가 다시 넣음.
+- [x] sdxl_lightning 첫 실행: `PEFT backend is required` 로 실패 → `peft` 추가 후 LoRA 로드·fuse 확인 (2026-10-16).

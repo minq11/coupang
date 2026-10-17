@@ -74,7 +74,7 @@ def _fill_holes(rgb: np.ndarray, holes: np.ndarray, hole_px: int, inpainter, par
             res = int(params.get("tile_res", 1024))
             ch, cw = crop.shape[:2]
             scale = min(1.0, res / max(ch, cw))
-            # FLUX 는 16 배수, SDXL 은 8 배수를 요구. 가장 엄격한 16 으로 맞춘다.
+            # SDXL 은 8 배수를 요구. 여유 있게 16 배수로 맞춘다.
             tw, th = max(64, int(cw * scale) // 16 * 16), max(64, int(ch * scale) // 16 * 16)
             crop_s = cv2.resize(crop, (tw, th), interpolation=cv2.INTER_AREA)
             m_s = cv2.resize(mcrop, (tw, th), interpolation=cv2.INTER_NEAREST)

@@ -62,12 +62,10 @@ def _fetch_vda(cfg: dict) -> int:
 def fetch_models(
     sdxl=False,
     da2=False,
-    flux=False,
     raft_stereo=False,
     raft_flow=False,
     vda=False,
     lama=False,
-    sdxl_fast=False,
 ) -> int:
     paths.ensure_hf_env()
     cfg = load_default_params()["models"]
@@ -80,39 +78,19 @@ def fetch_models(
         except Exception as e:  # noqa: BLE001
             print(f"LaMa 가중치 다운로드 실패 ({e}). {LAMA_HINT}")
             rc = 1
-    if sdxl_fast:
-        from huggingface_hub import hf_hub_download
-
-        print(f"[hf] {cfg['sdxl_lcm_lora_id']}")
-        _snapshot(cfg["sdxl_lcm_lora_id"], allow_patterns=["*.safetensors", "*.json"])
-        print(f"[hf] {cfg['sdxl_lightning_repo']}/{cfg['sdxl_lightning_file']}")
-        hf_hub_download(cfg["sdxl_lightning_repo"], cfg["sdxl_lightning_file"])
-        if not sdxl:
-            print("   (SDXL inpainting 본체는 --sdxl 로 따로 받는다)")
     if da2:
         _snapshot(cfg["da2_large_id"])
     if sdxl:
+        # SDXL inpainting 본체 + 가속 LoRA 두 개 (inpainter=sdxl_lightning / sdxl_lcm). 첫 실행 때 자동으로도 받는다.
+        from huggingface_hub import hf_hub_download
+
         _snapshot(
             cfg["sdxl_inpaint_id"],
             allow_patterns=["*.json", "*.txt", "*fp16*", "tokenizer*/*", "scheduler/*"],
         )
-    if flux:
-        from huggingface_hub import hf_hub_download
-
-        print(f"[hf] {cfg['flux_fill_gguf_repo']}/{cfg['flux_fill_gguf_file']}")
-        hf_hub_download(cfg["flux_fill_gguf_repo"], cfg["flux_fill_gguf_file"])
-        # text encoder / VAE / 설정은 base repo (게이트: HF_TOKEN 필요)
-        _snapshot(
-            cfg["flux_fill_id"],
-            allow_patterns=[
-                "*.json",
-                "text_encoder/*",
-                "text_encoder_2/*",
-                "tokenizer*/*",
-                "vae/*",
-                "scheduler/*",
-            ],
-        )
+        _snapshot(cfg["sdxl_lcm_lora_id"], allow_patterns=["*.safetensors", "*.json"])
+        print(f"[hf] {cfg['sdxl_lightning_repo']}/{cfg['sdxl_lightning_file']}")
+        hf_hub_download(cfg["sdxl_lightning_repo"], cfg["sdxl_lightning_file"])
     if raft_stereo:
         repo = _raft_stereo_dir()
         if not (repo / "core").exists():

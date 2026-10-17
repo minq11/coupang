@@ -621,11 +621,19 @@ def run_video_stream(
     from vr180.video.run import run_video as _run
 
     full_lines: list[str] = []
+    # 영상 변환 로그도 파일로 남긴다 (사진은 latest.log). GUI 가 멈추거나 닫혀도 원인을 볼 수 있게.
+    video_log = (log_dir() / "video_latest.log").open("w", encoding="utf-8", buffering=1)
 
     def _file_log(line: str) -> None:
         full_lines.append(line)
+        video_log.write(line + "\n")
 
-    ctx = RunContext(log_fn=_file_log)
+    latest_progress: list[str] = [""]  # 프레임 루프 진행률 (ctx.progress) 을 GUI 에 보이기 위한 슬롯
+
+    def _progress(frac: float, msg: str) -> None:
+        latest_progress[0] = f"{int(frac * 100)}% · {msg}" if msg else f"{int(frac * 100)}%"
+
+    ctx = RunContext(log_fn=_file_log, progress_fn=_progress)
     err: list[BaseException] = []
     result: dict = {}
 
@@ -646,7 +654,11 @@ def run_video_stream(
             result.update(r)
         except BaseException as e:  # noqa: BLE001
             err.append(e)
-            full_lines.extend(traceback.format_exc().splitlines())
+            tb = traceback.format_exc().splitlines()
+            full_lines.extend(tb)
+            video_log.write("\n".join(tb) + "\n")
+        finally:
+            video_log.close()
 
     th = threading.Thread(target=worker, daemon=True)
     th.start()
@@ -654,7 +666,7 @@ def run_video_stream(
         yield (
             "\n".join(ctx.lines[-200:]),
             "\n".join(full_lines[-800:]),
-            "⏳ 진행 중…",
+            ("⏳ 진행 중… " + latest_progress[0]) if latest_progress[0] else "⏳ 진행 중… (기준 프레임 처리)",
             None,
         )
         _time.sleep(0.5)

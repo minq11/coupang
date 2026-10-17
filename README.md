@@ -22,10 +22,9 @@ uv run vr180-gui                                     # http://127.0.0.1:7860
 모델 붙이기:
 
 ```powershell
-uv run vr180 fetch-models --da2 --sdxl           # Depth Anything V2 Large, SDXL inpainting
-uv run vr180 fetch-models --flux                 # FLUX.1 Fill dev GGUF Q4 (HF_TOKEN 필요, 비상업 라이선스)
+uv run vr180 fetch-models --da2 --sdxl --lama    # Depth Anything V2 Large, SDXL inpainting + Lightning/LCM LoRA, LaMa (lama 는 첫 실행 때 자동 다운로드도 됨)
 uv run vr180 fetch-models --raft-stereo          # RAFT-Stereo 코드(third_party/) + middlebury 가중치
-uv run vr180 run -i x.png -s stage_03_outpaint.inpainter=sdxl -s stage_04_stereo.matcher=raft_stereo -s stage_05_depth.estimator=da2_large
+uv run vr180 run -i x.png -s stage_03_outpaint.inpainter=sdxl_lightning -s stage_04_stereo.matcher=raft_stereo -s stage_05_depth.estimator=da2_large
 ```
 
 ## 구조
@@ -75,7 +74,7 @@ uv run pytest
 
 | 역할 | 기본 (모델 없음) | 모델 |
 |------|------------------|------|
-| 주변부 inpaint | OpenCV Telea, **stretch** (늘리기+블러, 밀리초) | **LaMa** big-lama (~1초, 추가 패키지 없음, 가중치 자동 다운로드), **SDXL Lightning** 4-step / **LCM** 8-step LoRA (2~5초), SDXL inpainting 30-step (10~20초), FLUX.1 Fill dev GGUF Q4 / NF4 (30~60초, **비상업 라이선스**) |
+| 주변부 inpaint | OpenCV Telea, **stretch** (늘리기+블러, 밀리초) | **LaMa** big-lama (~1초, 추가 패키지 없음, 가중치 자동 다운로드, 프롬프트 없음), **SDXL Lightning** 4-step / **LCM** 8-step LoRA (2~5초, fp16 ≈ 7GB, `peft` 필요). 사진·영상 탭 모두 같은 다섯 옵션 |
 | stereo disparity | OpenCV SGBM | RAFT-Stereo (middlebury), torchvision RAFT flow |
 | mono depth | stereo 외삽 | Depth Anything V2 Large / Base / Small (Apache-2.0은 Small 만, Base/Large 는 CC-BY-NC-4.0) |
 | FOV 추정 | 수동 | GeoCalib (`uv sync --extra geocalib`) |
