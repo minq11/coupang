@@ -119,6 +119,10 @@ models:
   da2_large_id: depth-anything/Depth-Anything-V2-Large-hf
   da2_base_id: depth-anything/Depth-Anything-V2-Base-hf
   da2_small_id: depth-anything/Depth-Anything-V2-Small-hf
+  # 인물 AR (MIT). trust_remote_code 로 불러온다.
+  birefnet_matting_id: ZhengPeng7/BiRefNet-matting
+  birefnet_portrait_id: ZhengPeng7/BiRefNet-portrait
+  person_sam2_size: small     # fetch-models --person 이 받을 SAM 2.1 크기
   raft_stereo_repo: https://github.com/princeton-vl/RAFT-Stereo.git
   # Video Depth Anything (영상 전용 시간축 깊이, iw3 없이 2D 영상 → VR180 가능하게 함)
   vda_repo: https://github.com/DepthAnything/Video-Depth-Anything.git
@@ -127,3 +131,42 @@ models:
   vda_small_file: video_depth_anything_vits.pth
   vda_large_file: video_depth_anything_vitl.pth
   device: auto            # auto | cuda | cpu
+
+# ───────────────────────────────────────────── 인물 AR (vr180 person / GUI '인물 AR' 탭)
+# 2D 사진·영상 속 모든 사람을 잘라 입체로 만들고, 위 컬러 / 아래 알파 영상으로 낸다. 모델은 전부 상업 이용 가능.
+person:
+  max_eye_width: 1920         # 눈당 처리 폭. 1920 이면 출력 영상 3840x2160 (위 컬러 / 아래 알파 × 좌우)
+  # 1) 사람 찾기 — RF-DETR-Seg (Apache-2.0)
+  detector: rfdetr_seg_medium # rfdetr_seg_nano | _small | _medium | _large
+  detect_threshold: 0.4
+  detect_long_side: 1032      # 검출 입력 긴 변 (24의 배수로 맞춤). 높일수록 멀리 작게 나온 사람에 강함
+  min_area_frac: 0.002        # 화면의 0.2% 보다 작은 사람은 무시
+  # 2) 따라가기 — SAM 2.1 (Apache-2.0). 없으면 매 프레임 검출로 대신
+  tracker: sam2               # sam2 | frame_detect
+  sam2_size: small            # tiny | small | base_plus | large
+  sam2_offload_state: false   # true 면 VRAM 대신 속도를 내준다 (긴 영상용)
+  keyframe_sec: 0.5           # 이 간격으로 새로 들어온 사람을 찾는다
+  iou_new: 0.3                # 박스 겹침이 이보다 작고…
+  link_dist: 1.0              # …몸 높이 × 이 값보다 멀리 움직였으면 새 사람
+  min_confirm: 2              # 키프레임 이만큼 잡혀야 등록 (포스터·마네킹 오검출 걸러내기)
+  strong_score: 0.8           # 이 점수 이상이면 한 번만 잡혀도 등록
+  max_miss: 3                 # 이만큼 연속으로 안 잡히면 그 사람은 끝
+  max_people: 8
+  # 3) 경계 다듬기 — BiRefNet-matting (MIT). none 이면 모델 없이 마스크 경계만 부드럽게
+  matter: birefnet_matting    # birefnet_matting | birefnet_portrait | none
+  core_frac: 0.010            # 마스크 안쪽 이 폭(화면 높이 비율)까지는 무조건 불투명
+  band_frac: 0.016            # 마스크 바깥 이 폭까지만 매팅 값, 그 밖은 무조건 투명
+  # 4) 깊이 — Apache-2.0 인 Small 만 (Base/Large 는 비상업)
+  image_depth_model: da2_small    # da2_small | none
+  video_depth_model: vda_small    # vda_small | da2_video_small | none
+  depth_group: 240            # VDA 한 번에 넣는 프레임 수 (긴 영상은 겹치게 나눠 넣고 눈금 맞춤)
+  depth_overlap: 16
+  depth_store_width: 960
+  # 5) 좌우 영상
+  relief_px: 10.0             # 1080 줄 기준 전체 시차 폭(px). 2m 앞 사람 몸 두께 ≈ 6px. 크면 과장됨
+  convergence: front          # front: 가장 앞 사람이 화면 거리 | mean: 사람 평균
+  # 6) 인코딩
+  codec: libx265
+  crf: 18
+  mask_path: null             # (사진) 사람 마스크 PNG 직접 지정
+

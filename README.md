@@ -70,6 +70,32 @@ vr180 jobs
 uv run pytest
 ```
 
+## 인물 AR (사진·영상 속 모든 사람 → 퀘스트 패스스루)
+
+2D 사진이나 영상에 나오는 **모든 사람**을 잘라 입체로 만들고, 퀘스트 패스스루 위에 내 방에 서 있는 것처럼 띄운다.
+GUI 의 **🧍 인물 AR** 탭, 또는 CLI:
+
+```powershell
+uv run vr180 fetch-models --person        # 처음 한 번 (launchers/모델 받기 (인물 AR).bat)
+uv run vr180 person -i clip.mp4           # 결과: work/person/<시각>_<이름>/out/
+uv run vr180 player                       # launchers/인물 AR 플레이어.bat
+adb reverse tcp:8080 tcp:8080             # 퀘스트 USB 연결 후. 퀘스트 브라우저에서 http://localhost:8080 → AR 시작
+```
+
+| 단계 | 모델 | 라이선스 |
+|---|---|---|
+| 사람 찾기 (0.5초마다) | RF-DETR-Seg medium | Apache-2.0 |
+| 영상 내내 따라가기 (앞·뒤 양방향) | SAM 2.1 small (`third_party/sam2`) | Apache-2.0 |
+| 경계 다듬기 (안쪽 불투명 / 바깥 투명 / 경계 띠만 매팅) | BiRefNet-matting | MIT |
+| 깊이 | Video Depth Anything Small · Depth Anything V2 Small | Apache-2.0 |
+| 좌우 영상 · 인코딩 | 자체 코드 · ffmpeg (HEVC) | |
+| 재생 | three.js r180 (`player/vendor`) WebXR immersive-ar | MIT |
+
+출력 `person_rgba_sbs.mp4` 는 위 절반 [왼눈 컬러 | 오른눈 컬러], 아래 절반 [왼눈 알파 | 오른눈 알파] (layout `rgba_sbs_v1`).
+기존 플레이어용 `person_green_sbs.mp4` (초록 배경 SBS) 도 같이 나온다. 중간 파일(`01_masks`, `02_alpha` …)을 고쳐 덮어쓰고
+같은 `--job-dir` 로 다시 돌리면 그 다음 단계부터 반영된다. 모델 없이 흐름만 보려면
+`vr180 person -i photo.jpg --mask mask.png -s matter=none -s image_depth_model=none`.
+
 ## 모델과 라이선스
 
 | 역할 | 기본 (모델 없음) | 모델 |

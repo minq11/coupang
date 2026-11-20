@@ -115,7 +115,28 @@ def cmd_fetch_models(a) -> int:
         raft_flow=a.raft_flow or a.all,
         vda=a.vda or a.all,
         lama=a.lama or a.all,
+        person=a.person or a.all,
     )
+
+
+def cmd_person(a) -> int:
+    from vr180.person.pipeline import run_person
+
+    override = _parse_set(a.set)
+    if a.mask:
+        override["mask_path"] = a.mask
+    res = run_person(a.input, job_dir=a.job_dir, params=override)
+    print(f"출력: {res['output']}")
+    print(f"초록 배경 SBS: {res['green']}")
+    print("퀘스트에서 보기: `vr180 player` → USB 연결 후 `adb reverse tcp:8080 tcp:8080` → 퀘스트 브라우저 http://localhost:8080")
+    return 0
+
+
+def cmd_player(a) -> int:
+    from vr180.player_server import serve
+
+    serve(host=a.host, port=a.port)
+    return 0
 
 
 def cmd_video(a) -> int:
@@ -208,8 +229,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="LaMa big-lama.pt 가중치 (inpainter=lama). 첫 실행 때 자동으로도 받는다",
     )
+    f.add_argument(
+        "--person",
+        action="store_true",
+        help="인물 AR 모델: SAM 2.1 small, BiRefNet-matting, DA2 Small, VDA Small, RF-DETR-Seg (모두 상업 이용 가능)",
+    )
     f.add_argument("--all", action="store_true")
     f.set_defaults(fn=cmd_fetch_models)
+
+    pa = sub.add_parser("person", help="인물 AR: 사진·영상 속 모든 사람을 잘라 입체 + 투명도 영상으로 (퀘스트 패스스루용)")
+    pa.add_argument("--input", "-i", required=True, help="2D 사진 또는 영상")
+    pa.add_argument("--job-dir", help="작업 폴더 (기본 work/person/<시각>_<이름>). 같은 폴더를 주면 바뀐 단계부터만 다시 돈다")
+    pa.add_argument("--mask", help="사람 마스크 PNG 를 직접 지정 (사진 전용, 흰색 = 사람). 검출 모델 없이 테스트할 때")
+    pa.add_argument("--set", "-s", action="append", default=[], help="person 파라미터 덮어쓰기: key=value (예: relief_px=12)")
+    pa.set_defaults(fn=cmd_person)
+
+    pl = sub.add_parser("player", help="퀘스트 패스스루 플레이어 웹서버 (기본 http://localhost:8080)")
+    pl.add_argument("--port", type=int, default=8080)
+    pl.add_argument("--host", default="127.0.0.1", help="0.0.0.0 이면 같은 와이파이에서 접속 가능 (단 WebXR 은 HTTPS 필요)")
+    pl.set_defaults(fn=cmd_player)
 
     v = sub.add_parser(
         "video",

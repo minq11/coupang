@@ -9,6 +9,7 @@ import gradio as gr
 
 from vr180 import __version__
 from vr180.gui import common as C
+from vr180.gui import person as person_tab
 from vr180.gui import video as video_tab
 from vr180.gui.tabs import (
     tab0_input,
@@ -52,6 +53,8 @@ def build() -> gr.Blocks:
                 _build_photo()
             with gr.Tab("🎞 영상"):
                 video_tab.build()
+            with gr.Tab("🧍 인물 AR"):
+                person_tab.build()
     return demo
 
 

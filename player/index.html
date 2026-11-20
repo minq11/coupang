@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VR180 인물 AR 플레이어</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #202124; color: #e8eaed; font: 15px/1.5 system-ui, sans-serif; overflow: hidden; }
+  #ui { position: fixed; left: 12px; top: 12px; right: 12px; max-width: 560px; background: rgba(32,33,36,.92); border-radius: 10px; padding: 12px 14px; z-index: 2; }
+  #ui h1 { font-size: 16px; margin: 0 0 8px; }
+  select, button { font: inherit; color: inherit; background: #3c4043; border: 1px solid #5f6368; border-radius: 6px; padding: 6px 10px; margin: 2px 4px 2px 0; }
+  button.primary { background: #1a73e8; border-color: #1a73e8; }
+  button:disabled { opacity: .5; }
+  #status { margin-top: 6px; font-size: 13px; color: #bdc1c6; white-space: pre-line; }
+  #help { margin-top: 6px; font-size: 12px; color: #9aa0a6; }
+  canvas { display: block; }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="ui">
+  <h1>인물 AR 플레이어</h1>
+  <div>
+    <select id="media"><option value="">불러오는 중…</option></select>
+    <button id="reload" title="목록 새로고침">↻</button>
+  </div>
+  <div>
+    <button id="ar" class="primary" disabled>AR 시작 (패스스루)</button>
+    <button id="vr" disabled>VR 시작</button>
+    <button id="play" disabled>재생/정지</button>
+    <button id="eye">미리보기: 왼눈</button>
+  </div>
+  <div id="status"></div>
+  <div id="help">퀘스트 조작 · 오른 스틱 위/아래: 거리 · 오른 스틱 좌/우: 크기 · 왼 스틱 좌/우: 회전 · 왼 스틱 위/아래: 높이 · A: 재생/정지 · B: 처음 배치로<br>
+  PC 미리보기 · ↑↓ 거리 · ←→ 크기 · PgUp/PgDn 높이 · Space 재생</div>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

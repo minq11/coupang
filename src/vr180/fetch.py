@@ -21,7 +21,7 @@ def _snapshot(repo: str, **kw) -> None:
     snapshot_download(repo, **kw)
 
 
-def _fetch_vda(cfg: dict) -> int:
+def _fetch_vda(cfg: dict, sizes: tuple[str, ...] = ("small", "large")) -> int:
     """Video-Depth-Anything 저장소 clone + 가중치(small/large) 다운로드. 재실행 안전."""
     rc = 0
     repo_dir = paths.third_party_dir() / "Video-Depth-Anything"
@@ -38,7 +38,7 @@ def _fetch_vda(cfg: dict) -> int:
         return 1
     wdir = paths.models_dir() / "vda"
     wdir.mkdir(parents=True, exist_ok=True)
-    for size in ("small", "large"):
+    for size in sizes:
         hf_repo = cfg[f"vda_{size}_hf"]
         fname = cfg[f"vda_{size}_file"]
         target = wdir / fname
@@ -66,6 +66,7 @@ def fetch_models(
     raft_flow=False,
     vda=False,
     lama=False,
+    person=False,
 ) -> int:
     paths.ensure_hf_env()
     cfg = load_default_params()["models"]
@@ -123,5 +124,71 @@ def fetch_models(
         raft_large(weights=Raft_Large_Weights.DEFAULT)
     if vda:
         rc |= _fetch_vda(cfg)
+    if person:
+        rc |= _fetch_person(cfg)
     print("완료")
+    return rc
+
+
+def _download(url: str, dst, log=print) -> None:
+    import urllib.request
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    log(f"[dl] {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    tmp.replace(dst)
+
+
+def _fetch_person(cfg: dict) -> int:
+    """인물 AR: SAM 2 코드(고정 커밋) + SAM 2.1 small 가중치, BiRefNet-matting, DA2 Small, VDA Small, RF-DETR-Seg.
+    모두 상업 이용 가능한 라이선스 (Apache-2.0 / MIT). 재실행 안전."""
+    from vr180.person.models import (
+        SAM2_CKPT_URL,
+        SAM2_COMMIT,
+        SAM2_REPO,
+        SAM2_SIZES,
+        sam2_ckpt_path,
+        sam2_repo_dir,
+    )
+
+    rc = 0
+    repo = sam2_repo_dir()
+    if not (repo / "sam2" / "build_sam.py").exists():
+        print(f"[git] {SAM2_REPO}@{SAM2_COMMIT[:10]} → {repo}")
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--depth", "1", SAM2_REPO, SAM2_COMMIT], check=True)
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "FETCH_HEAD"], check=True)
+    else:
+        print(f"[skip] SAM 2 코드 이미 있음: {repo}")
+    size = str(cfg.get("person_sam2_size", "small"))
+    ck = sam2_ckpt_path(size)
+    if not ck.exists():
+        try:
+            _download(SAM2_CKPT_URL.format(file=SAM2_SIZES[size][1]), ck)
+        except Exception as e:  # noqa: BLE001
+            print(f"SAM 2.1 가중치 다운로드 실패 ({e}). {SAM2_CKPT_URL.format(file=SAM2_SIZES[size][1])} 를 받아 {ck} 에 두세요.")
+            rc = 1
+    for key in ("birefnet_matting_id", "da2_small_id"):
+        try:
+            _snapshot(cfg[key])
+        except Exception as e:  # noqa: BLE001
+            print(f"{cfg[key]} 다운로드 실패 ({e})")
+            rc = 1
+    rc |= _fetch_vda(cfg, sizes=("small",))
+    try:  # RF-DETR 는 처음 만들 때 가중치를 스스로 받는다
+        import rfdetr
+
+        print("[rfdetr] rf-detr-seg-medium")
+        rfdetr.RFDETRSegMedium()
+    except Exception as e:  # noqa: BLE001
+        print(f"RF-DETR 준비 실패 ({e}). `uv sync` 후 다시 시도하세요.")
+        rc = 1
     return rc

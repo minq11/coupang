@@ -228,3 +228,21 @@ class EncoderPipe:
         if rc != 0 and et is None:  # 이미 예외 전파 중이면 덮어쓰지 않는다
             raise RuntimeError(f"ffmpeg 인코딩 실패 (rc={rc}): {self.stderr_text()[-500:]}")
         return False
+
+def extract_frames_jpg(
+    input_path: Path, out_dir: Path, width: int, height: int, quality: int = 2
+) -> int:
+    """영상 전체를 out_dir/00000.jpg … 로 뽑는다 (SAM 2 영상 입력 형식). 지정 크기로 축소. 반환: 프레임 수."""
+    _ensure_ffmpeg()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.jpg"):
+        old.unlink()
+    cmd = [
+        "ffmpeg", "-y", "-v", "error", "-i", str(input_path),
+        "-vf", f"scale={int(width)}:{int(height)}:flags=lanczos",
+        "-q:v", str(int(quality)), "-start_number", "0",
+        str(out_dir / "%05d.jpg"),
+    ]
+    subprocess.run(cmd, check=True)
+    return len(list(out_dir.glob("*.jpg")))
