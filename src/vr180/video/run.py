@@ -474,8 +474,8 @@ def _emit_mono_frame(
     disp_equi = disp_equi * extent_w  # 범위 밖은 0 (양 눈 동일)
 
     # 3) 가운데 뷰를 ±d/2 로 양방향 워핑
-    warped_l, cov_l = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=+0.5)
-    warped_r, cov_r = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=-0.5)
+    warped_l, cov_l = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=warp.MONO_SCALE_L)
+    warped_r, cov_r = warp.forward_warp(c_equi, disp_equi, src_mask=extent_mask, taps=2, scale=warp.MONO_SCALE_R)
     # 구멍은 Telea 만 (프레임마다 inpaint 모델은 금지, 비용 문제)
     holes_l = (~cov_l & extent_mask).astype(np.uint8) * 255
     holes_r = (~cov_r & extent_mask).astype(np.uint8) * 255

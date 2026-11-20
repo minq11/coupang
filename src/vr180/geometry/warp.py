@@ -13,6 +13,14 @@ import numpy as np
 
 from vr180.geometry import sphere
 
+# 2D(가운데 눈) 한 장에서 양쪽 눈을 만들 때 쓰는 forward_warp 의 scale.
+# 실제 눈 위치 기준: 가까운 물체는 왼눈 영상에서 오른쪽, 오른눈 영상에서 왼쪽에 보인다 (교차 시차).
+# forward_warp 는 scale=+1 일 때 가까운 픽셀을 왼쪽으로 민다 (L → R 규약, sbs 모드와 동일).
+# 따라서 C → L 은 −0.5, C → R 은 +0.5. (L 을 원본 그대로 두는 비대칭 모드는 C → R 에 +1.0.)
+MONO_SCALE_L = -0.5
+MONO_SCALE_R = +0.5
+MONO_SCALE_R_ASYM = +1.0
+
 
 def disparity_to_du(disp_rad: np.ndarray, size: int, min_cos: float = 0.05) -> np.ndarray:
     """각도 disparity (S×S, rad) → 수평 픽셀 이동량 du (float32). 극에서는 cosφ 를 min_cos 로 클램프."""
@@ -119,3 +127,50 @@ def hole_mask(covered: np.ndarray, region: np.ndarray | None = None) -> np.ndarr
     if region is not None:
         h &= region
     return h.astype(np.uint8) * 255
+
+
+def splat_horizontal(
+    img: np.ndarray,
+    du: np.ndarray,
+    priority: np.ndarray,
+    src_mask: np.ndarray | None = None,
+    taps: int = 2,
+) -> tuple[np.ndarray, np.ndarray]:
+    """평면(원근) 이미지용 전방 워핑. 픽셀마다 수평으로 du 픽셀만큼 밀어 찍는다.
+
+    img: H×W 또는 H×W×C (채널 수 제한 없음, 예: RGBA), du: H×W float (+ = 오른쪽),
+    priority: H×W — 같은 자리에 여러 픽셀이 오면 큰 쪽(가까운 쪽)이 이긴다.
+    src_mask: 옮길 픽셀 (None 이면 전체). 반환: (out, covered). covered=False 는 구멍.
+    """
+    img = np.asarray(img)
+    squeeze = img.ndim == 2
+    if squeeze:
+        img = img[..., None]
+    h, w = img.shape[:2]
+    sel = np.ones((h, w), dtype=bool) if src_mask is None else np.asarray(src_mask, dtype=bool)
+    ys, xs = np.nonzero(sel)
+    tx_f = xs.astype(np.float32) + np.asarray(du, dtype=np.float32)[ys, xs]
+    pr = np.asarray(priority, dtype=np.float32)[ys, xs]
+    color = img[ys, xs]
+    if taps == 1:
+        tx_list = [np.round(tx_f).astype(np.int64)]
+    else:
+        base = np.floor(tx_f).astype(np.int64)
+        tx_list = [base, base + 1]
+
+    zbuf = np.full(h * w, -np.inf, dtype=np.float32)
+    for tx in tx_list:
+        ok = (tx >= 0) & (tx < w)
+        np.maximum.at(zbuf, ys[ok] * w + tx[ok], pr[ok])
+    out = np.zeros_like(img)
+    covered = np.zeros((h, w), dtype=bool)
+    for tx in tx_list:
+        ok = (tx >= 0) & (tx < w)
+        lin = ys[ok] * w + tx[ok]
+        win = pr[ok] >= zbuf[lin] - 1e-6
+        ty_i, tx_i = ys[ok][win], tx[ok][win]
+        out[ty_i, tx_i] = color[ok][win]
+        covered[ty_i, tx_i] = True
+    if squeeze:
+        out = out[..., 0]
+    return out, covered

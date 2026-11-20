@@ -113,8 +113,9 @@ def _run_mono(job, params: dict, ctx) -> dict:
     size = pano_c.shape[0]
     d = job.stage_dir(INDEX)
     symmetric = bool(params.get("mono_symmetric", True))
-    scale_l = +0.5 if symmetric else 0.0
-    scale_r = -0.5 if symmetric else -1.0
+    # 가까운 물체: 왼눈은 오른쪽, 오른눈은 왼쪽 (warp.MONO_SCALE_* 설명 참고)
+    scale_l = warp.MONO_SCALE_L if symmetric else 0.0
+    scale_r = warp.MONO_SCALE_R if symmetric else warp.MONO_SCALE_R_ASYM
 
     ctx.progress(0.1, "L 전방 워핑")
     taps = int(params.get("splat_taps", 2))
