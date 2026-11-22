@@ -10,6 +10,9 @@
   2) SAM 2.1 에 각 트랙의 첫 키프레임 마스크를 한꺼번에 넣고, 앞으로 한 번 · 뒤로 한 번 전파.
      첫 키프레임 이후는 앞 방향 결과, 그 직전 구간(최대 interval 프레임)은 뒤 방향 결과를 쓴다
      → 키프레임 사이에 들어온 사람도 들어오던 순간부터 잡힌다.
+     긴 영상은 segment 프레임씩 나눈다 (SAM 2 는 폴더의 프레임을 전부 RAM 에 올린다: 1024² float, 프레임당 약 12.6MB).
+     구간 k+1 은 구간 k 의 마지막 interval+1 프레임과 겹친다. 구간 k 의 마지막 프레임에서 사람별 마스크를 받아
+     다음 구간의 프롬프트로 넣고, 그 뒤에 처음 나온 사람만 새로 넣는다 (겹친 앞부분은 그 사람들의 뒤 방향 전파용).
 "모든 사람" 이 목표라 같은 사람이 두 트랙으로 잡혀도 합집합 결과는 같다 (계산만 조금 늘어남).
 
 SAM 2 가 없으면 track_detect_each_frame: 매 프레임 검출 + 앞뒤 3프레임 다수결 (깜빡임은 더 있음).
@@ -17,6 +20,8 @@ SAM 2 가 없으면 track_detect_each_frame: 매 프레임 검출 + 앞뒤 3프�
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -218,23 +223,27 @@ def track_sam2(
     width: int,
     interval: int,
     offload_state: bool = False,
+    segment: int = 0,
     ctx=None,
 ) -> TrackResult:
-    """predictor: SAM2VideoPredictor (또는 같은 메서드를 가진 테스트용 가짜)."""
+    """predictor: SAM2VideoPredictor (또는 같은 메서드를 가진 테스트용 가짜).
+    segment > 0 이고 영상이 그보다 길면 구간으로 나눠 추적한다 (RAM 상한 ≈ segment × 12.6MB)."""
     union = [np.zeros((height, width), dtype=bool) for _ in range(n_frames)]
     stats = _Stats(height)
     if not tracks:
         return TrackResult(height, width, [_pack(m) for m in union], [], 0.0, 1.0)
 
-    first = {t.tid: t.first_frame for t in tracks}
     end = {t.tid: (t.end_frame if t.end_frame is not None else n_frames - 1) for t in tracks}
-
-    def accumulate(f: int, obj_ids, logits, valid) -> None:
-        masks = _to_numpy_masks(logits)
-        for k, oid in enumerate(obj_ids):
-            if valid(int(oid), f) and masks[k].any():
-                union[f] |= masks[k]
-                stats.update(masks[k])
+    seg = int(segment) if segment and int(segment) > 0 else n_frames
+    seg = max(seg, 2 * (interval + 1))  # 겹침(interval+1) 보다 충분히 길게
+    bounds = []  # [s, e) 구간
+    s0 = 0
+    while True:
+        e0 = min(n_frames, s0 + seg)
+        bounds.append((s0, e0))
+        if e0 >= n_frames:
+            break
+        s0 = e0 - 1 - interval
 
     try:
         import torch
@@ -245,41 +254,141 @@ def track_sam2(
     except ImportError:  # 테스트용 가짜 predictor
         guard, amp = nullcontext(), nullcontext()
 
+    carry: dict[int, np.ndarray] = {}  # 이전 구간 마지막 프레임의 사람별 마스크
     with guard, amp:
-        state = predictor.init_state(
-            video_path=str(frames_dir),
-            offload_video_to_cpu=True,
-            offload_state_to_cpu=bool(offload_state),
-            async_loading_frames=False,
-        )
-        for t in tracks:
-            predictor.add_new_mask(state, frame_idx=t.first_frame, obj_id=t.tid, mask=t.prompt_mask)
-
-        start = min(first.values())
-        total = (n_frames - start) + max(first.values())
-        done = 0
-        # 앞 방향: 그 사람의 첫 키프레임 ~ 끝 프레임까지만 인정
-        for f, obj_ids, logits in predictor.propagate_in_video(state):
-            accumulate(f, obj_ids, logits, lambda oid, fr: first[oid] <= fr <= end[oid])
-            done += 1
-            if ctx is not None:
-                ctx.progress(min(1.0, done / max(total, 1)), f"따라가기 (앞) {f + 1}/{n_frames}")
-        # 뒤 방향: 첫 키프레임 직전 구간 (키프레임 사이에 들어온 사람을 들어온 순간부터)
-        back_start = max(first.values())
-        if back_start > 0:
-            for f, obj_ids, logits in predictor.propagate_in_video(
-                state, start_frame_idx=back_start, reverse=True
-            ):
-                accumulate(f, obj_ids, logits, lambda oid, fr: first[oid] - interval <= fr < first[oid])
-                done += 1
+        for k, (s, e) in enumerate(bounds):
+            # 이 구간이 맡는 새 사람: 이전 구간 끝 다음 ~ 이 구간 끝 사이에 처음 나온 사람.
+            # 뒤 방향 창(first − interval ~ first)이 겹친 앞부분 안에 들어간다 (first ≥ s + interval + 1).
+            lo = bounds[k - 1][1] if k > 0 else 0
+            carry_frame = lo - 1 if k > 0 else None  # = 이전 구간의 마지막 프레임 = s + interval
+            new = [t for t in tracks if lo <= t.first_frame < e]
+            if not new and not carry:
+                continue
+            if len(bounds) == 1:
+                video_dir, tmp = str(frames_dir), None
+            else:
+                tmp = _segment_dir(frames_dir, s, e)
+                video_dir = str(tmp)
                 if ctx is not None:
-                    ctx.progress(min(1.0, done / max(total, 1)), f"따라가기 (뒤) {f + 1}/{n_frames}")
-        if hasattr(predictor, "reset_state"):
-            predictor.reset_state(state)
+                    ctx.log(
+                        f"  따라가기 구간 {k + 1}/{len(bounds)}: {s}~{e - 1} (이어받은 사람 {len(carry)}, 새 사람 {len(new)})"
+                    )
+            try:
+                carry = _sam2_segment(
+                    predictor,
+                    video_dir,
+                    s,
+                    e,
+                    new,
+                    carry,
+                    carry_frame,
+                    end,
+                    interval,
+                    offload_state,
+                    union,
+                    stats,
+                    n_frames,
+                    ctx,
+                )
+            finally:
+                if tmp is not None:
+                    shutil.rmtree(tmp, ignore_errors=True)
 
     return TrackResult(
         height, width, [_pack(m) for m in union], [t.summary() for t in tracks], stats.frac, stats.bottom
     )
+
+
+def _segment_dir(frames_dir: str, s: int, e: int):
+    """frames_dir 의 s..e-1 프레임을 0 부터 다시 번호 매긴 폴더 (하드링크, 안 되면 복사)."""
+    from pathlib import Path
+
+    src = Path(frames_dir)
+    d = src.parent / f"_sam2_seg_{s:05d}"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    for i in range(s, e):
+        a, b = src / f"{i:05d}.jpg", d / f"{i - s:05d}.jpg"
+        try:
+            os.link(a, b)
+        except OSError:
+            shutil.copyfile(a, b)
+    return d
+
+
+def _sam2_segment(
+    predictor,
+    video_dir,
+    s,
+    e,
+    new,
+    carry,
+    carry_frame,
+    end,
+    interval,
+    offload_state,
+    union,
+    stats,
+    n_frames,
+    ctx,
+) -> dict[int, np.ndarray]:
+    """한 구간 추적. 전체 프레임 번호 f = s + 구간 안 번호. 반환: 구간 마지막 프레임의 사람별 마스크 (다음 구간용)."""
+    state = predictor.init_state(
+        video_path=video_dir,
+        offload_video_to_cpu=True,
+        offload_state_to_cpu=bool(offload_state),
+        async_loading_frames=False,
+    )
+    valid_from: dict[int, int] = {}
+    for oid, m in carry.items():
+        if end[oid] >= carry_frame:
+            predictor.add_new_mask(state, frame_idx=carry_frame - s, obj_id=oid, mask=m)
+            valid_from[oid] = carry_frame
+    for t in new:
+        predictor.add_new_mask(state, frame_idx=t.first_frame - s, obj_id=t.tid, mask=t.prompt_mask)
+        valid_from[t.tid] = t.first_frame
+    if not valid_from:
+        if hasattr(predictor, "reset_state"):
+            predictor.reset_state(state)
+        return {}
+    last = e - 1
+    out: dict[int, np.ndarray] = {}
+
+    def accumulate(f: int, obj_ids, logits, ok) -> None:
+        masks = _to_numpy_masks(logits)
+        for j, oid in enumerate(obj_ids):
+            oid = int(oid)
+            if ok(oid, f) and masks[j].any():
+                union[f] |= masks[j]
+                stats.update(masks[j])
+                if f == last:
+                    out[oid] = masks[j].copy()
+
+    # 앞 방향: 그 사람의 시작(첫 키프레임 또는 이어받은 프레임) ~ 끝 프레임까지만 인정
+    for fl, obj_ids, logits in predictor.propagate_in_video(state):
+        f = s + int(fl)
+        accumulate(f, obj_ids, logits, lambda oid, fr: valid_from.get(oid, n_frames) <= fr <= end[oid])
+        if ctx is not None:
+            ctx.progress(min(1.0, (f + 1) / n_frames), f"따라가기 (앞) {f + 1}/{n_frames}")
+    # 뒤 방향: 새 사람의 첫 키프레임 직전 구간 (키프레임 사이에 들어온 사람을 들어온 순간부터)
+    first_new = {t.tid: t.first_frame for t in new}
+    back_start = max(first_new.values(), default=s) - s
+    if back_start > 0:
+        for fl, obj_ids, logits in predictor.propagate_in_video(
+            state, start_frame_idx=back_start, reverse=True
+        ):
+            f = s + int(fl)
+            accumulate(
+                f,
+                obj_ids,
+                logits,
+                lambda oid, fr: oid in first_new and first_new[oid] - interval <= fr < first_new[oid],
+            )
+            if ctx is not None:
+                ctx.progress(min(1.0, (f + 1) / n_frames), f"따라가기 (뒤) {f + 1}/{n_frames}")
+    if hasattr(predictor, "reset_state"):
+        predictor.reset_state(state)
+    return out
 
 
 def _to_numpy_masks(logits) -> np.ndarray:

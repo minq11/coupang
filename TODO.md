@@ -298,14 +298,27 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 ### 같이 고친 것
 - mono(2D 입력) 사진·영상의 좌우 워핑 방향이 반대라 가까운 물체가 멀어 보이던 버그 수정 (warp.MONO_SCALE_*). 방향을 실제로 검사하는 테스트 추가.
 
-### 남은 것 (GPU · 퀘스트에서)
-- [ ] `uv sync` (pyproject 의존성 추가로 uv.lock 이 다시 만들어짐) → `모델 받기 (인물 AR).bat`
-- [ ] 실제 모델 첫 실행: RF-DETR / SAM 2.1 / BiRefNet(trust_remote_code + transformers 5) / VDA Small 로그 확인
+### 실측 (2026-11-22, 3080 Ti 12GB)
+- `uv sync` 는 extra 를 지운다 → `uv sync --extra geocalib --extra vda` 로 해야 GeoCalib 이 남는다 (`업데이트 (uv sync).bat` 도 같은 문제).
+- 실제 모델 첫 실행 OK: RF-DETR-Seg medium / SAM 2.1 small(`_C` 없음 경고는 무시 가능) / BiRefNet-matting / DA2·VDA Small.
+  BiRefNet 은 trust_remote_code 라 `birefnet_matting_rev` 로 커밋 고정.
+- 사진 1장(1920×3414): 37.8초 (대부분 모델 로딩). 사람 1명 깔끔, 이불 조각이 조금 같이 잘림.
+- 5초 영상(1080×1920 30fps, 150프레임): **273초 → 109초**. 처음 단계별: 찾기+SAM2 24 / 경계 57 / 깊이 81 / 좌우+인코딩 111.
+  - 깊이: xFormers 가 없어 DINOv2 어텐션이 32프레임×2442토큰 행렬을 통째로 만들어 VDA Small 만 8GB → Windows 공유 메모리로 넘쳐 느려짐.
+    `depth_vda._patch_dinov2_sdpa` (PyTorch SDPA) 로 67초 → 10초, 8GB → 3GB. 결과 동일 (상관 0.9999).
+  - 좌우+인코딩: 프레임당 워핑 255 + 포장 257 + 초록 139ms 가 병목 → 스레드(`stereo_workers`, 기본 코어 절반) 로 111초 → 35초.
+    `codec: hevc_nvenc` 도 지원 (35 → 27.5초, 파일 1.5배). 기본은 libx265 유지.
+  - 경계: `matte.zones` 원형 morphology → 거리 변환 (79 → 10ms/프레임). 남은 시간은 BiRefNet 자체 (131ms/프레임).
+  - VRAM 최대 7.2GB (다른 프로그램 4.2GB 포함) → 인물 AR 은 약 3GB.
+- 긴 영상: SAM 2 를 `sam2_segment`(기본 300) 프레임씩 나눠 추적. 구간은 interval+1 프레임 겹치고, 앞 구간 마지막 프레임의
+  사람별 마스크로 다음 구간을 시작. 실제 SAM 2 로 150프레임을 64씩 나눠도 한 번에 돌린 것과 IoU 최소 0.984.
+  한계: 구간 경계 프레임에서 가려져 마스크가 빈 사람은 다음 구간으로 안 넘어간다.
+
+### 남은 것 (퀘스트에서)
 - [ ] 사진 한 장 → 퀘스트에서 그럴듯한지 (입체감 relief_px, 초점, 배치)
-- [ ] 5초 고정 카메라 영상 → 3080 Ti 실측: 단계별 시간, VRAM, 3840×2160 HEVC 재생 끊김
-- [ ] 오검출 빈도, 경계 깜빡임, 깊이 출렁임 튜닝
+- [ ] 3840×2160 / 2160×3840 HEVC 퀘스트 재생 끊김 (libx265 vs hevc_nvenc)
+- [ ] 실제 사람이 움직이는 영상으로 오검출 빈도, 경계 깜빡임, 깊이 출렁임 튜닝 (지금 실측은 사진에 줌만 넣은 영상)
 - [ ] 비교: 깊이를 보내 퀘스트에서 입체를 만드는 방식(옆으로 걸으면 시차) vs 지금의 미리 구운 좌우 영상
-- [ ] 긴 영상: SAM 2 가 프레임 전부를 메모리에 올림 (프레임당 약 12.6MB) → 겹치는 구간으로 나눠 추적하고 앞 구간 마지막 마스크로 다음 구간 시작
 - [ ] 예비안 RVM(GPL-3.0, 서버 전용) 품질 비교
 - [ ] 서비스화: 업로드 화면, 크레딧 단가(처리 시간 실측 기반), 이용약관(초상권·악용 금지), Meta 스토어 정책 확인
 

@@ -162,6 +162,13 @@ class EncoderPipe:
     def stderr_text(self) -> str:
         return b"".join(self._stderr_tail).decode(errors="replace")
 
+    def _quality_args(self) -> list[str]:
+        """x264/x265 는 crf. NVENC(hevc_nvenc 등)는 crf 가 없어 같은 숫자를 cq(고정 품질)로 쓴다.
+        NVENC 는 CPU 를 거의 안 써서 인물 AR 처럼 프레임 만들기가 CPU 를 다 쓰는 경로에서 빠르다."""
+        if "nvenc" in self.codec:
+            return ["-rc", "vbr", "-cq", str(self.crf), "-b:v", "0", "-preset", "p5"]
+        return ["-crf", str(self.crf), "-preset", "medium"]
+
     def __enter__(self):
         # 입력 1: rawvideo 파이프 (영상). 입력 2: 원본 파일 (오디오만 복사).
         cmd = [
@@ -191,10 +198,7 @@ class EncoderPipe:
             self.codec,
             "-pix_fmt",
             "yuv420p",
-            "-crf",
-            str(self.crf),
-            "-preset",
-            "medium",
+            *self._quality_args(),
             "-c:a",
             "copy",
             "-shortest",

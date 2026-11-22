@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
     "tracker": "sam2",
     "sam2_size": "small",
     "sam2_offload_state": False,
+    "sam2_segment": 300,
     "matter": "birefnet_matting",
     "core_frac": 0.010,
     "band_frac": 0.016,
@@ -66,6 +69,7 @@ DEFAULTS: dict[str, Any] = {
     "depth_store_width": 960,
     "relief_px": 10.0,
     "convergence": "front",
+    "stereo_workers": 0,
     "codec": "libx265",
     "crf": 18,
     "mask_path": None,
@@ -423,11 +427,6 @@ def _run_video(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
     def load_frame(i: int) -> np.ndarray:
         return imageio.read_rgb(d0 / f"{i:05d}.jpg")
 
-    if n > 600:
-        ctx.log(
-            f"  주의: {n}프레임. SAM 2 는 모든 프레임을 메모리에 올린다 (1024² float 기준 프레임당 약 12.6MB). "
-            "RAM 이 부족하면 영상을 잘라 넣거나 tracker=frame_detect 를 쓰세요."
-        )
 
     # 1 사람 찾기 + 따라가기
     interval = max(1, int(round(fps * float(p["keyframe_sec"]))))
@@ -446,6 +445,8 @@ def _run_video(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
                 p["max_people"],
             ],
             "tracker": [p["tracker"], p["sam2_size"]],
+            # 구간 나누기는 실제로 나눌 때만 키에 넣는다 (짧은 영상의 기존 캐시 유지)
+            **({"segment": int(p["sam2_segment"])} if 0 < int(p.get("sam2_segment") or 0) < n else {}),
         },
     )
     if not s1.fresh() or models.detector is not None:
@@ -542,22 +543,34 @@ def _run_video(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
         F.EncoderPipe(src, packed_path, 2 * W, 2 * H, fps, codec=p["codec"], crf=int(p["crf"])) as enc_a,
         F.EncoderPipe(src, green_path, 2 * W, H, fps, codec=p["codec"], crf=int(p["crf"])) as enc_g,
     ):
-        for i in range(n):
-            rgb = load_frame(i)
+
+        def make(i: int):
             mask = load_mask(i)
             alpha_u8 = imageio.read_mask(d2 / f"{i:05d}.png")
             inv = np.load(d3 / f"{i:05d}.npy").astype(np.float32)
             disp = stereo.disparity_px(inv, mask, lo=lo, hi=hi, t0=t0, relief_px=relief)
-            left, right = stereo.eye_views(rgb, alpha_u8, disp)
-            packed = stereo.pack(left, right)
-            enc_a.write(packed.tobytes())
-            enc_g.write(stereo.green_sbs(left, right).tobytes())
-            if mask.any():
-                dmin, dmax = min(dmin, float(disp[mask].min())), max(dmax, float(disp[mask].max()))
-            if i == 0:
-                imageio.write_image(out / "poster.png", packed)
-                imageio.write_image(out / "preview.png", stereo.preview(left, right))
-            ctx.progress((i + 1) / n, f"인코딩 {i + 1}/{n}")
+            left, right = stereo.eye_views(load_frame(i), alpha_u8, disp)
+            rng = (float(disp[mask].min()), float(disp[mask].max())) if mask.any() else None
+            prev = stereo.preview(left, right) if i == 0 else None
+            return stereo.pack(left, right), stereo.green_sbs(left, right), rng, prev
+
+        # 프레임마다 독립 (워핑·포장 ≈ 0.65s/프레임, 1080x1920). cv2·numpy 가 GIL 을 풀어 스레드로 나눈다.
+        # 인코더 두 개(x265)도 CPU 를 쓰므로 코어의 절반만. 순서는 제출 순서대로 꺼내 유지.
+        workers = max(1, min(int(p.get("stereo_workers") or 0) or (os.cpu_count() or 2) // 2, 8))
+        with ThreadPoolExecutor(workers) as pool:
+            pending = [pool.submit(make, i) for i in range(min(n, 2 * workers))]
+            for i in range(n):
+                packed, green, rng, prev = pending.pop(0).result()
+                if i + len(pending) + 1 < n:
+                    pending.append(pool.submit(make, i + len(pending) + 1))
+                enc_a.write(packed.tobytes())
+                enc_g.write(green.tobytes())
+                if rng:
+                    dmin, dmax = min(dmin, rng[0]), max(dmax, rng[1])
+                if i == 0:
+                    imageio.write_image(out / "poster.png", packed)
+                    imageio.write_image(out / "preview.png", prev)
+                ctx.progress((i + 1) / n, f"인코딩 {i + 1}/{n}")
     media = {
         "type": "video",
         "file": packed_path.name,
@@ -637,6 +650,7 @@ def _track_video(load_frame, n, W, H, interval, frames_dir, p, models: PersonMod
             width=W,
             interval=interval,
             offload_state=bool(p["sam2_offload_state"]),
+            segment=int(p.get("sam2_segment") or 0),
             ctx=ctx,
         )
     finally:

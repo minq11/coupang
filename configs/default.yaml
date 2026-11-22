@@ -123,6 +123,7 @@ models:
   da2_small_id: depth-anything/Depth-Anything-V2-Small-hf
   # 인물 AR (MIT). trust_remote_code 로 불러온다.
   birefnet_matting_id: ZhengPeng7/BiRefNet-matting
+  birefnet_matting_rev: eccde0a8cbdce7ac5fecfeb06340fe7b949e85d9  # trust_remote_code 라 커밋 고정 (null = 최신)
   birefnet_portrait_id: ZhengPeng7/BiRefNet-portrait
   person_sam2_size: small     # fetch-models --person 이 받을 SAM 2.1 크기
   raft_stereo_repo: https://github.com/princeton-vl/RAFT-Stereo.git
@@ -147,6 +148,7 @@ person:
   tracker: sam2               # sam2 | frame_detect
   sam2_size: small            # tiny | small | base_plus | large
   sam2_offload_state: false   # true 면 VRAM 대신 속도를 내준다 (긴 영상용)
+  sam2_segment: 300           # 이 프레임 수씩 나눠 추적 (SAM 2 는 구간 프레임을 RAM 에 올림, 프레임당 약 12.6MB). 0 = 한 번에
   keyframe_sec: 0.5           # 이 간격으로 새로 들어온 사람을 찾는다
   iou_new: 0.3                # 박스 겹침이 이보다 작고…
   link_dist: 1.0              # …몸 높이 × 이 값보다 멀리 움직였으면 새 사람
@@ -167,6 +169,7 @@ person:
   # 5) 좌우 영상
   relief_px: 10.0             # 1080 줄 기준 전체 시차 폭(px). 2m 앞 사람 몸 두께 ≈ 6px. 크면 과장됨
   convergence: front          # front: 가장 앞 사람이 화면 거리 | mean: 사람 평균
+  stereo_workers: 0           # 좌우 영상 만들기 스레드 수. 0 = 코어 절반 (최대 8)
   # 6) 인코딩
   codec: libx265
   crf: 18

@@ -171,6 +171,8 @@ class BiRefNetMatter(Matter):
     def __init__(self, cfg: dict, repo: str | None = None, res: int = 1024):
         super().__init__(cfg)
         self.repo = repo or cfg.get("birefnet_matting_id", "ZhengPeng7/BiRefNet-matting")
+        # trust_remote_code 로 저장소의 파이썬 코드를 실행하므로 커밋을 고정한다 (matting 만. portrait 는 비상업 예비안)
+        self.revision = cfg.get("birefnet_matting_rev") if repo is None else None
         self.res = int(res)
         self.device = resolve_device(cfg.get("device", "auto"))
         self.model = None
@@ -181,7 +183,9 @@ class BiRefNetMatter(Matter):
 
         paths.ensure_hf_env()
         torch.set_float32_matmul_precision("high")
-        model = AutoModelForImageSegmentation.from_pretrained(self.repo, trust_remote_code=True)
+        model = AutoModelForImageSegmentation.from_pretrained(
+            self.repo, trust_remote_code=True, revision=self.revision
+        )
         model = model.to(self.device).eval()
         if self.device == "cuda":
             model = model.half()

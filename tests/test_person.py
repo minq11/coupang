@@ -193,6 +193,29 @@ def test_track_sam2_reverse_fills_person_entering_between_keyframes(tmp_path):
     assert 0.6 < res.tallest_frac < 0.85
 
 
+@pytest.mark.parametrize("enter_frame", [20, 35])
+def test_track_sam2_segmented_matches_whole(tmp_path, enter_frame):
+    """긴 영상 구간 나누기: 구간 32프레임([0,32) [16,48) [32,60))으로 나눠도 한 번에 돌린 결과와 같아야 한다.
+    enter_frame=35 → B 는 키프레임 45 에서 처음 잡혀 두 번째 구간이 새로 넣고, A 는 구간 경계에서 이어받는다."""
+    frames, gts = make_person_video(w=320, h=180, n=60, enter_frame=enter_frame)
+    d = tmp_path / "frames"
+    d.mkdir()
+    for i, f in enumerate(frames):
+        imageio.write_image(d / f"{i:05d}.jpg", f, jpg_quality=98)
+    kf = T.detect_keyframes(FakeDetector(), lambda i: frames[i], 60, 15)
+    tracks = T.link_keyframes(kf, n_frames=60, interval=15, frame_area=320 * 180)
+    assert len(tracks) == 2
+    kw = dict(n_frames=60, height=180, width=320, interval=15)
+    whole = T.track_sam2(FakeSam2(), str(d), tracks, **kw)
+    seg = T.track_sam2(FakeSam2(), str(d), tracks, segment=32, **kw)
+    for f in range(60):
+        a, b = whole.mask(f), seg.mask(f)
+        u = (a | b).sum()
+        assert u == 0 or (a & b).sum() / u > 0.98, f
+    assert seg.mask(enter_frame + 4).sum() > seg.mask(5).sum()  # 들어오던 B 도 잡힘
+    assert not list(tmp_path.glob("_sam2_seg_*"))  # 구간 폴더 정리
+
+
 # ----------------------------------------------------------------------------- 경계 3구역
 
 

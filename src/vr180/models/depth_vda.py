@@ -63,6 +63,31 @@ def _vda_available() -> tuple[bool, str]:
     return True, ""
 
 
+def _patch_dinov2_sdpa() -> None:
+    """VDA 의 DINOv2 Attention 을 PyTorch SDPA(flash / mem-efficient) 로 바꾼다.
+
+    xFormers 가 없으면 원본은 `q @ kᵀ` 를 통째로 만든다: 32프레임 × 6헤드 × 2442² 토큰(518×924 입력) ≈ 2.3GB/층.
+    3080 Ti(12GB) 에서 Small 만으로 8GB 를 써 Windows 공유 메모리로 넘치고 2fps 까지 느려졌다 (2026-11-22 실측).
+    수식은 같다 (softmax(q·kᵀ·scale)·v). third_party 는 고치지 않고 여기서 한 번만 바꾼다."""
+    import torch.nn.functional as F
+    from video_depth_anything.dinov2_layers import attention as A  # type: ignore
+
+    if getattr(A.Attention, "_vr180_sdpa", False) or A.XFORMERS_AVAILABLE:
+        return
+
+    def forward(self, x, attn_bias=None):
+        assert attn_bias is None
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        x = F.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2], scale=self.scale)
+        x = x.transpose(1, 2).reshape(B, N, C)
+        return self.proj_drop(self.proj(x))
+
+    A.Attention.forward = forward
+    A.MemEffAttention.forward = forward
+    A.Attention._vr180_sdpa = True
+
+
 class VDAEstimator(VideoDepthEstimator):
     """VDA 네이티브 어댑터. infer_video_depth 를 그대로 쓰고 내부 window 에 위임."""
 
@@ -98,6 +123,7 @@ class VDAEstimator(VideoDepthEstimator):
             sys.path.insert(0, str(repo))
         from video_depth_anything.video_depth import VideoDepthAnything  # type: ignore
 
+        _patch_dinov2_sdpa()
         cfg = _VDA_MODEL_CONFIGS[self.variant]
         self.model = VideoDepthAnything(**cfg)
         state = torch.load(str(wp), map_location="cpu")

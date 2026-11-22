@@ -176,9 +176,9 @@ def _fetch_person(cfg: dict) -> int:
         except Exception as e:  # noqa: BLE001
             print(f"SAM 2.1 가중치 다운로드 실패 ({e}). {SAM2_CKPT_URL.format(file=SAM2_SIZES[size][1])} 를 받아 {ck} 에 두세요.")
             rc = 1
-    for key in ("birefnet_matting_id", "da2_small_id"):
+    for key, rev_key in (("birefnet_matting_id", "birefnet_matting_rev"), ("da2_small_id", None)):
         try:
-            _snapshot(cfg[key])
+            _snapshot(cfg[key], revision=cfg.get(rev_key) if rev_key else None)
         except Exception as e:  # noqa: BLE001
             print(f"{cfg[key]} 다운로드 실패 ({e})")
             rc = 1
