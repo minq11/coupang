@@ -24,6 +24,7 @@ def inputs(job):
         job.path(0, "R.png"),
         job.path(1, "camera.json"),
         job.path(2, "valid_mask.png"),
+        job.path(2, "projection.json"),
     ]
 
 
@@ -72,7 +73,7 @@ def run(job, params: dict, ctx) -> dict:
     )
 
     ctx.progress(0.6, "equirect 투영")
-    mx, my, inside = reproject.pinhole_to_equi_maps(size, w, h, hfov)
+    mx, my, inside = reproject.pinhole_to_equi_maps(size, w, h, hfov, *reproject.projection_angles(job))
     disp_equi = reproject.remap_float_to_equi(disp_rad, mx, my, inside & valid_equi, fill=0.0)
 
     d = job.stage_dir(INDEX)

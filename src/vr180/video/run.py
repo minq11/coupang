@@ -279,7 +279,7 @@ def run_video(
 
     # remap 테이블 (원근 → equirect). 입력은 SBS 니까 폭이 2·W_half 라고 가정.
     half_w = W // 2
-    mx, my, inside = reproject.pinhole_to_equi_maps(S, half_w, H, hfov)
+    mx, my, inside = reproject.pinhole_to_equi_maps(S, half_w, H, hfov, *reproject.projection_angles(job))
     # 블렌드 가중치: valid 안쪽 edge_blend_deg 폭 (° → px) 로 선형. 원본은 이 띠 바깥에선 100% 프레임.
     blend_deg = _edge_blend_deg(job, params_override)
     deg_per_pixel = 180.0 / S
@@ -438,7 +438,7 @@ def _run_video_mono(
     ctx.log(f"[mono] surround: S={S} hfov={cam['hfov_deg']}°")
 
     # 원근 → equirect remap 테이블. mono 영상은 전체가 센터 카메라.
-    mx, my, inside = reproject.pinhole_to_equi_maps(S, W, H, hfov)
+    mx, my, inside = reproject.pinhole_to_equi_maps(S, W, H, hfov, *reproject.projection_angles(job))
 
     # 블렌드 가중치 (valid 안쪽만 프레임, 바깥은 고정 pano)
     blend_deg = _edge_blend_deg(job, params_override)

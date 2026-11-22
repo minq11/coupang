@@ -1,4 +1,4 @@
-"""GeoCalib 단일 이미지 카메라 추정 → 수평 FOV. 선택 의존성 (`uv sync --extra geocalib`)."""
+"""GeoCalib 단일 이미지 카메라 추정 → 수평 FOV + 기울기(pitch/roll). 선택 의존성 (`uv sync --extra geocalib`)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ class GeoCalibFov(FovEstimator):
         import torch
 
         self.load()
+        self.last_tilt = None
         img = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).float().to(self.device) / 255.0
         try:
             with torch.inference_mode():
@@ -46,4 +47,20 @@ class GeoCalibFov(FovEstimator):
         if unc is not None:
             u = float(torch.as_tensor(unc).flatten()[0].detach().cpu())
             conf = float(max(0.0, min(1.0, 1.0 - u / max(f, 1.0) * 10.0)))
+        # 중력 방향 → (roll, pitch) rad. 실측(2026-11-22): 위쪽만 잘라내면 pitch 증가, 내용을 반시계로 돌리면 roll 증가.
+        try:
+            rp = res["gravity"].rp[0].detach().cpu().numpy()
+
+            def _unc(key):
+                v = res.get(key)
+                return None if v is None else math.degrees(float(torch.as_tensor(v).flatten()[0].detach().cpu()))
+
+            self.last_tilt = {
+                "pitch_deg": math.degrees(float(rp[1])),
+                "roll_deg": math.degrees(float(rp[0])),
+                "pitch_unc_deg": _unc("pitch_uncertainty"),
+                "roll_unc_deg": _unc("roll_uncertainty"),
+            }
+        except Exception:  # noqa: BLE001  기울기는 덤. 없어도 화각은 쓴다
+            self.last_tilt = None
         return hfov, conf

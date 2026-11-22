@@ -30,10 +30,11 @@ RUN_ALL_LABEL = "▶ 한번에 진행 (Stage 0 → 7)"
 
 
 def _load_main(job_id):
-    """상단 '주요 옵션' 10개 위젯의 값을 Job 파라미터에서 읽어 돌려준다 (순서: main_opts 와 동일)."""
+    """상단 '주요 옵션' 11개 위젯의 값을 Job 파라미터에서 읽어 돌려준다 (순서: main_opts 와 동일)."""
     return [
         float(C.get_param(job_id, 1, "hfov_deg", 60.0)),
         float(C.get_param(job_id, 2, "pitch_offset_deg", 0.0)),
+        float(C.get_param(job_id, 2, "roll_deg", 0.0)),
         int(C.get_param(job_id, 2, "size", 4096)),
         float(C.get_param(job_id, 2, "extent_h_deg", 180.0)),
         float(C.get_param(job_id, 2, "extent_v_deg", 180.0)),
@@ -120,7 +121,17 @@ def _build_photo() -> None:
                     value=0,
                     step=0.5,
                     label="pitch_offset_deg (얼굴 올리기)",
-                    info="+ = VR 적도를 사진 위쪽(얼굴 방향) 으로. 썸네일의 노란 가로선이 얼굴에 걸치는 값이 정답. 전신 세로샷 보통 +20~+30°.",
+                    info="+ = VR 적도를 사진 위쪽(얼굴 방향) 으로. 썸네일의 노란 선 = VR 수평선. 업로드 때 GeoCalib 이 "
+                    "카메라 기울기를 자신 있게 추정하면 그 값이 들어간다. 얼굴에 맞추려면 전신 세로샷 보통 +20~+30°.",
+                    elem_classes=["vr180-tip"],
+                )
+                roll = gr.Slider(
+                    -15,
+                    15,
+                    value=0,
+                    step=0.5,
+                    label="roll_deg (수평 바로잡기)",
+                    info="+ = 사진 속 수평선이 반시계로 기운 만큼 바로 세움. 노란 선이 바닥·창틀과 나란하면 정답.",
                     elem_classes=["vr180-tip"],
                 )
                 size = gr.Dropdown(
@@ -184,7 +195,7 @@ def _build_photo() -> None:
                 elem_classes=["vr180-tip"],
                 visible=False,
             )
-        main_opts = [hfov, pitch, size, ext_h, ext_v, fade, estimator, depth_strength, inpainter, prompt]
+        main_opts = [hfov, pitch, roll, size, ext_h, ext_v, fade, estimator, depth_strength, inpainter, prompt]
 
         # ───── 최종 출력 (한번에 진행 완료 시 Stage 7 산출물이 여기 뜸)
         with gr.Group(elem_classes=["vr180-final"]):
@@ -264,41 +275,54 @@ def _build_photo() -> None:
             """사진 업로드 → Job 자동 생성 + 화각 자동 추정. 실패 시 60° 로 폴백.
             raw_preview State 도 세팅해 pitch 슬라이더 가늠자 재렌더용으로 보관."""
             if not f:
-                return None, C.status_md(None), None, None, gr.update(), ""
+                return None, C.status_md(None), None, None, gr.update(), gr.update(), gr.update(), ""
             j, _, md = C.create_job(f, None, input_mode=mode)
             try:
-                raw, conf, name = C.estimate_hfov_from_job(j)
+                raw, conf, name, tilt = C.estimate_hfov_from_job(j)
                 hfov_v, tag = _snap_or_default(raw)
                 log = f"📐 {name}: 추정 {raw:.2f}° (confidence {conf:.2f}){tag} → 슬라이더 반영"
+                pitch_v, roll_v, tilt_log = C.tilt_to_sliders(tilt)
+                log += tilt_log
             except Exception as e:  # noqa: BLE001  (geocalib 미설치/수렴 실패 등 모두 60 폴백)
-                hfov_v = 60.0
+                hfov_v, pitch_v, roll_v = 60.0, 0.0, 0.0
                 log = f"⚠️ 화각 자동 추정 실패 ({type(e).__name__}: {e}) — 디폴트 60° 적용"
             # params 에도 즉시 반영 → load_all 재조회 시 일관성 유지. auto_estimate 는 끈 상태로 저장.
             job = C.get_job(j)
             if job is not None:
                 job.set_param(1, "hfov_deg", float(hfov_v))
                 job.set_param(1, "auto_estimate", False)
+                job.set_param(2, "pitch_offset_deg", float(pitch_v))
+                job.set_param(2, "roll_deg", float(roll_v))
                 job.save_params()
-            # 가늠자 포함 썸네일. pitch 는 업로드 직후 0 (사진 중앙 = VR 적도).
+            # 가늠자 포함 썸네일 (노란 선 = 현재 pitch/roll 의 VR 수평선)
             preview = C.input_preview_for_guide(j)
-            thumb = C.draw_pitch_guide(preview, hfov_v, 0.0)
-            return j, md, thumb, preview, gr.update(value=hfov_v), log
+            thumb = C.draw_pitch_guide(preview, hfov_v, pitch_v, roll_v)
+            return (
+                j,
+                md,
+                thumb,
+                preview,
+                gr.update(value=hfov_v),
+                gr.update(value=pitch_v),
+                gr.update(value=roll_v),
+                log,
+            )
 
         upload_evt = upload.upload(
             do_upload,
             [upload, input_mode_radio],
-            [job_id, status, input_thumb, raw_preview, hfov, log_brief],
+            [job_id, status, input_thumb, raw_preview, hfov, pitch, roll, log_brief],
         ).then(load_all, [job_id], all_outputs)
 
         for fn, ins, outs in shared["after_load"]:
             upload_evt.then(fn, ins, outs)
 
         # 가늠자 실시간 재렌더: hfov · pitch 가 바뀌면 raw_preview 로부터 input_thumb 다시 그림
-        def redraw_guide(preview, hfov_v, pitch_v):
-            return C.draw_pitch_guide(preview, hfov_v, pitch_v)
+        def redraw_guide(preview, hfov_v, pitch_v, roll_v):
+            return C.draw_pitch_guide(preview, hfov_v, pitch_v, roll_v)
 
-        hfov.change(redraw_guide, [raw_preview, hfov, pitch], [input_thumb])
-        pitch.change(redraw_guide, [raw_preview, hfov, pitch], [input_thumb])
+        for w in (hfov, pitch, roll):
+            w.change(redraw_guide, [raw_preview, hfov, pitch, roll], [input_thumb])
 
         cancel_btn.click(C.cancel_run, [job_id], [log_brief])
 
@@ -315,6 +339,7 @@ def _build_photo() -> None:
             (
                 hfov_v,
                 pitch_v,
+                roll_v,
                 size_v,
                 ext_h_v,
                 ext_v_v,
@@ -334,6 +359,8 @@ def _build_photo() -> None:
                 {
                     "size": int(size_v),
                     "pitch_offset_deg": float(pitch_v),
+                    "roll_deg": float(roll_v),
+                    "tilt_from_camera": False,
                     "extent_h_deg": float(ext_h_v),
                     "extent_v_deg": float(ext_v_v),
                     "extent_fade_deg": float(fade_v),

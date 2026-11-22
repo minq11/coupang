@@ -511,28 +511,40 @@ HFOV_MAX = 120.0
 HFOV_STEP = 0.5
 
 
-def draw_pitch_guide(rgb, hfov_deg: float, pitch_deg: float, max_side: int = 640):
-    """입력 썸네일 위에 노란 가로선 1개 — '현재 pitch 값이 가리키는 세로 위치'.
+def draw_pitch_guide(rgb, hfov_deg: float, pitch_deg: float, roll_deg: float = 0.0, max_side: int = 640):
+    """입력 썸네일 위에 노란 선 1개 — 현재 pitch/roll 에서 'VR 수평선(적도)' 이 사진의 어디를 지나는지.
 
-    선을 얼굴에 걸치면 그 pitch 가 'VR 적도=얼굴'을 만드는 값. 수식:
-      focal_px = w / (2·tan(hfov/2));   row = h/2 − focal_px · tan(pitch_rad)
+    선을 얼굴에 걸치면 그 pitch 가 'VR 적도=얼굴'을 만드는 값. 바닥·창틀과 나란하면 roll 이 맞는 것.
+    Stage 2 와 같은 회전(sphere.photo_tilt_matrix)으로 VR 수평선 위 점들을 사진에 투영해 잇는다.
+    roll=0 이면 row = h/2 − f·tan(pitch) 의 가로선.
     """
     import math
 
     import cv2
+    import numpy as np
+
+    from vr180.geometry import sphere
 
     if rgb is None:
         return None
     img = imageio.downscale_for_preview(rgb, max_side).copy()
     h, w = img.shape[:2]
-    f_px = w / (2.0 * math.tan(math.radians(float(hfov_deg)) / 2.0))
-    row = int(round(h / 2.0 - f_px * math.tan(math.radians(float(pitch_deg)))))
-    row = max(0, min(h - 1, row))
-    cv2.line(img, (0, row), (w - 1, row), (255, 220, 0), 2)
+    m = sphere.photo_tilt_matrix(math.radians(float(pitch_deg)), math.radians(float(roll_deg)))
+    theta = np.linspace(-math.pi / 2 + 1e-3, math.pi / 2 - 1e-3, 721)
+    d = sphere.angles_to_dir(theta, np.zeros_like(theta)) @ m.T
+    d = d[d[:, 2] > 1e-6]
+    px, py, _ = sphere.dir_to_pinhole(d, w, h, math.radians(float(hfov_deg)))
+    pts = np.stack([px + 0.5, py + 0.5], 1)
+    pts = pts[(np.abs(pts[:, 0]) < 4 * w) & (np.abs(pts[:, 1]) < 4 * h)]
+    row = h / 2.0
+    if len(pts) >= 2:
+        cv2.polylines(img, [np.round(pts).astype(np.int32)[:, None, :]], False, (255, 220, 0), 2, cv2.LINE_AA)
+        row = float(np.interp(w / 2.0, pts[:, 0], pts[:, 1]))
+    label = f"pitch {pitch_deg:+.1f}" + (f" roll {roll_deg:+.1f}" if roll_deg else "") + f"  (hfov {hfov_deg:g})"  # cv2 putText 는 ASCII 만
     cv2.putText(
         img,
-        f"pitch {pitch_deg:+.1f}°  (hfov {hfov_deg:g}°)",
-        (10, max(18, row - 8)),
+        label,
+        (10, int(max(18, min(h - 6, row - 8)))),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (255, 220, 0),
@@ -563,7 +575,7 @@ def snap_hfov(hfov: float) -> float:
 
 
 def estimate_hfov_from_job(job_id: str | None) -> tuple[float, float, str]:
-    """선택된 FOV estimator (기본 GeoCalib) 를 Job 입력 이미지에 돌려 (hfov_deg_raw, confidence, model) 반환.
+    """선택된 FOV estimator (기본 GeoCalib) 를 Job 입력 이미지에 돌려 (hfov_deg_raw, confidence, model, tilt) 반환. tilt 는 GeoCalib 기울기 dict 또는 None.
        Stage 0 산출물(C.png/L.png)이 있으면 그걸, 없으면 raw input (sbs 는 좌반) 을 쓴다.
        반환값은 raw — 반올림/클램프는 호출측에서 snap_hfov 로. 추정 자체 실패 시 gr.Error."""
     job = get_job(job_id)
@@ -588,6 +600,7 @@ def estimate_hfov_from_job(job_id: str | None) -> tuple[float, float, str]:
         with est:
             hfov, conf = est.estimate_hfov(img)
             model_name = est.info().name
+            tilt = est.last_tilt
     except ModuleNotFoundError as e:
         hint = {"geocalib": "uv sync --extra geocalib"}.get(name, f"'{name}' 선택 의존성 설치 필요")
         raise gr.Error(f"'{name}' 패키지 미설치 — 터미널에서 `{hint}` 실행 후 GUI 재시작") from e
@@ -596,7 +609,34 @@ def estimate_hfov_from_job(job_id: str | None) -> tuple[float, float, str]:
     # 극단적으로 비정상인 값만 거부 (model 자체가 수렴 실패한 경우). 슬라이더 범위 안으로 조이는 건 호출측.
     if hfov is None or hfov <= 5 or hfov >= 175:
         raise gr.Error(f"FOV 추정 결과가 비정상 (hfov={hfov}, conf={conf:.2f}) — 모델 수렴 실패")
-    return float(hfov), float(conf), model_name
+    return float(hfov), float(conf), model_name, tilt
+
+
+TILT_MAX_UNC_DEG = 3.0  # GeoCalib 불확실도가 이보다 작은 값만 슬라이더에 자동 반영 (pitch · roll 따로)
+# 실측(2026-11-22): 좁은 화각(27~50°) 인물 사진은 pitch ±4~7° 로 불확실, roll 은 대부분 ±1~2°.
+
+
+def tilt_to_sliders(tilt: dict | None) -> tuple[float, float, str]:
+    """GeoCalib 기울기 → (pitch_offset_deg, roll_deg, 로그 문자열). 불확실한 값은 0 유지.
+    pitch_offset = −카메라 pitch (내려다보고 찍었으면 VR 정면을 사진 위쪽으로)."""
+    if not tilt:
+        return 0.0, 0.0, ""
+
+    def sure(key):
+        u = tilt.get(key)
+        return u is not None and u <= TILT_MAX_UNC_DEG
+
+    def snap(v, lim):
+        return float(min(max(round(v * 2) / 2, -lim), lim))
+
+    pitch = snap(-tilt["pitch_deg"], 60) if sure("pitch_unc_deg") else 0.0
+    roll = snap(tilt["roll_deg"], 15) if sure("roll_unc_deg") else 0.0
+    used = [n for n, ok in (("pitch", sure("pitch_unc_deg")), ("roll", sure("roll_unc_deg"))) if ok]
+    log = f" · 기울기 pitch {tilt['pitch_deg']:+.1f}° roll {tilt['roll_deg']:+.1f}°"
+    log += f" → {'/'.join(used)} 반영" if used else " (불확실해서 0 유지)"
+    if used and len(used) == 1:
+        log += f", {'roll' if used == ['pitch'] else 'pitch'} 은 불확실해서 0"
+    return pitch, roll, log
 
 
 def run_video_stream(

@@ -224,7 +224,22 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 
 ---
 
-## 4. 카메라 기울기(pitch / roll) 반영 — 인물·전신 사진이 주 입력이면 1번보다 먼저
+## 4. 카메라 기울기(pitch / roll) 반영 — 구현됨 (2026-11-22)
+
+### 구현 결과 (아래 원래 계획과 다른 점)
+- 파라미터는 Stage 2 에 둔다: 기존 `pitch_offset_deg`(+ = VR 정면을 사진 위쪽으로) + 새 `roll_deg`(+ = 반시계로 기운 수평선을 바로 세움).
+  `tilt_from_camera: true` 면 Stage 1 GeoCalib 추정값 사용 (camera.json `pitch_deg`/`roll_deg`, pitch_offset = −pitch).
+- pitch 가 예전에는 `φ' = φ + pitch` (위도만 밀기) 라 가장자리에서 틀렸다 → `sphere.photo_tilt_matrix` 진짜 회전. 키스톤도 같이 펴짐.
+- **버그 수정**: Stage 4(sbs 시차) 와 영상 프레임 루프(`video/run.py` sbs·mono)가 pitch 없이 펼쳐 pitch ≠ 0 이면 원본이 주변부와 어긋났다.
+  Stage 2 가 `projection.json` 에 실제 쓴 값을 남기고 `reproject.projection_angles(job)` 로 모두 같은 회전을 쓴다.
+- GUI: 주요 옵션에 roll 슬라이더. 업로드 때 GeoCalib 기울기를 불확실도 3° 이하인 축만 슬라이더에 반영
+  (실측: 좁은 화각 인물 사진은 pitch ±4~7° 로 불확실, roll 은 ±1~2°). 노란 가늠자 선 = 실제 VR 수평선 (roll 이면 기울어짐).
+- GeoCalib 부호 실측: 사진 위쪽만 잘라내면 pitch 증가(위를 봄), 내용을 반시계로 돌리면 roll 증가.
+- 검증: 회전 왕복 테스트, pitch 위치·roll 기울기, Stage 4 시차가 같은 회전으로 펼쳐지는지(수정 전 코드로는 실패 확인), 가늠자.
+  실사진을 8° 돌려 GeoCalib → 펼치기로 사람이 다시 똑바로 서는 것 확인.
+- 남은 것: [ ] Quest 에서 전신 사진이 똑바로 서 보이는지. [ ] 영상 탭에는 roll 슬라이더 없음 (surround job 파라미터로는 동작).
+
+### (원래 계획)
 
 ### 왜
 - 지금은 "사진 중앙 = 정면(수평)" 가정. 전신 사진은 보통 눈높이에서 살짝 내려다보며 찍어 사진 중앙이 수평선 아래에 있고 키스톤(수직선이 위로 모임)이 들어 있다.

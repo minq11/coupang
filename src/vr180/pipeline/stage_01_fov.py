@@ -34,6 +34,7 @@ def run(job, params: dict, ctx) -> dict:
     conf = 1.0
     est_hfov = None
     model_name = ""
+    tilt = None
     if params.get("auto_estimate", False):
         from vr180.models.registry import get_fov_estimator
 
@@ -43,6 +44,7 @@ def run(job, params: dict, ctx) -> dict:
                 with est:
                     est_hfov, conf = est.estimate_hfov(left)
                     model_name = est.info().name
+                    tilt = est.last_tilt
                 ctx.log(f"자동 추정 hfov={est_hfov} conf={conf:.2f}")
             except Exception as e:  # 추정 실패해도 파이프라인은 진행
                 ctx.log(f"FOV 자동 추정 실패 ({e}) — 수동값 {hfov}° 유지")
@@ -67,7 +69,13 @@ def run(job, params: dict, ctx) -> dict:
         "confidence": conf,
         "auto_hfov_deg": est_hfov,
         "estimator": model_name,
+        # 카메라 기울기 (GeoCalib). Stage 2 의 tilt_from_camera 가 켜져 있으면 pitch_offset = −pitch_deg, roll = roll_deg.
+        "pitch_deg": None if tilt is None else tilt["pitch_deg"],
+        "roll_deg": None if tilt is None else tilt["roll_deg"],
+        "tilt_uncertainty_deg": None if tilt is None else [tilt.get("pitch_unc_deg"), tilt.get("roll_unc_deg")],
     }
     imageio.write_json(job.path(INDEX, "camera.json"), cam)
     ctx.log(f"hfov={hfov:.2f}° vfov={cam['vfov_deg']:.2f}° f={cam['focal_px']:.1f}px ({source})")
+    if tilt is not None:
+        ctx.log(f"기울기 추정: pitch {tilt['pitch_deg']:+.1f}° roll {tilt['roll_deg']:+.1f}° (+ = 위를 봄 / 수평선 반시계)")
     return {"model": model_name, "hfov_deg": hfov}

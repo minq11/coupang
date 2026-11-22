@@ -134,6 +134,18 @@ def rotation_yaw_pitch(yaw: float, pitch: float) -> np.ndarray:
     return r_yaw @ r_pitch
 
 
+def photo_tilt_matrix(pitch_offset: float, roll: float = 0.0) -> np.ndarray:
+    """VR 공간(world) 방향 → 사진 카메라 방향. d_cam = M @ d_world.
+
+    pitch_offset (rad): + 면 VR 정면(θ=φ=0) 이 사진 위쪽을 가리킨다 (= 카메라가 그만큼 내려다보고 찍음).
+    roll (rad): + 면 사진 속 수평선이 반시계로 기울어 있음 (= 카메라가 시계 방향으로 기울어짐). 펼칠 때 바로 세운다.
+    GeoCalib 의 gravity (roll, pitch) 와는 pitch_offset = −pitch, roll = roll.
+    """
+    cr, sr = math.cos(roll), math.sin(roll)
+    r_roll = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)  # 카메라 광축(Z) 회전
+    return r_roll @ rotation_yaw_pitch(0.0, pitch_offset)
+
+
 def world_to_cam(d_world: np.ndarray, rot: np.ndarray) -> np.ndarray:
     return np.asarray(d_world) @ rot  # (R^T d) 를 행벡터로
 

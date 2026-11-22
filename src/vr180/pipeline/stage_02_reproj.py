@@ -26,7 +26,7 @@ def inputs(job):
 
 def outputs(job):
     d = job.stage_dir(INDEX)
-    extent_outs = [d / "extent_mask.png", d / "extent_fade.png"]
+    extent_outs = [d / "extent_mask.png", d / "extent_fade.png", d / "projection.json"]
     if job.input_mode == "mono":
         return [d / "C_equi.png", d / "valid_mask.png", d / "preview_sbs.png", *extent_outs]
     return [d / "L_equi.png", d / "R_equi.png", d / "valid_mask.png", d / "preview_sbs.png", *extent_outs]
@@ -71,6 +71,14 @@ def _draw_extent_boundary(preview_sbs: np.ndarray, size: int, extent_info: dict)
     return img
 
 
+def _tilt(cam: dict, params: dict) -> tuple[float, float, str]:
+    """(pitch_offset_deg, roll_deg, 출처). tilt_from_camera 가 켜져 있고 Stage 1 이 GeoCalib 으로 기울기를 추정했으면 그 값,
+    아니면 수동 pitch_offset_deg / roll_deg."""
+    if params.get("tilt_from_camera", False) and cam.get("pitch_deg") is not None:
+        return -float(cam["pitch_deg"]), float(cam.get("roll_deg") or 0.0), "camera.json"
+    return float(params.get("pitch_offset_deg", 0.0) or 0.0), float(params.get("roll_deg", 0.0) or 0.0), "manual"
+
+
 def run(job, params: dict, ctx) -> dict:
     cam = imageio.read_json(job.path(1, "camera.json"))
     size = int(params.get("size", 4096))
@@ -78,14 +86,21 @@ def run(job, params: dict, ctx) -> dict:
     d = job.stage_dir(INDEX)
     bg = params.get("preview_only_background", "black")
 
-    pitch = math.radians(float(params.get("pitch_offset_deg", 0.0)))
+    pitch_deg, roll_deg, tilt_src = _tilt(cam, params)
+    pitch, roll = math.radians(pitch_deg), math.radians(roll_deg)
+    # Stage 4 · 영상 루프가 같은 회전으로 remap 하도록 실제 쓴 값을 남긴다 (reproject.projection_angles)
+    imageio.write_json(
+        d / "projection.json", {"pitch_offset_deg": pitch_deg, "roll_deg": roll_deg, "source": tilt_src}
+    )
+    if pitch_deg or roll_deg:
+        ctx.log(f"기울기 pitch_offset {pitch_deg:+.1f}° roll {roll_deg:+.1f}° ({tilt_src})")
 
     if job.input_mode == "mono":
         center = imageio.read_rgb(job.path(0, "C.png"))
         h, w = center.shape[:2]
         hfov = math.radians(float(cam["hfov_deg"]))
         ctx.progress(0.2, "remap 테이블")
-        mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch)
+        mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch, roll)
         ctx.progress(0.5, "C 재투영")
         c_equi = reproject.remap_to_equi(center, mx, my, valid, interp)
         imageio.write_image(d / "C_equi.png", c_equi)
@@ -104,7 +119,7 @@ def run(job, params: dict, ctx) -> dict:
     h, w = left.shape[:2]
     hfov = math.radians(float(cam["hfov_deg"]))
     ctx.progress(0.1, "remap 테이블")
-    mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch)
+    mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch, roll)
     ctx.progress(0.3, "L 재투영")
     l_equi = reproject.remap_to_equi(left, mx, my, valid, interp)
     ctx.progress(0.6, "R 재투영")

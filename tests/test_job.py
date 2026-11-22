@@ -144,3 +144,32 @@ def test_mono_symmetric_warp_opposite_signs(work_dir, sample_mono, small_params_
         # 색차의 평균 밝기 비교로 느슨하게: L 의 중앙 영역이 pano_C 중앙 영역보다 오른쪽 샘플링
         assert abs(shift) >= 1  # 뭔가 밀렸다는 것만 확인
     assert pano_l.shape == pano_r.shape == pano_c.shape
+
+
+def test_tilt_projection_shared_with_stage4(work_dir, sample_sbs, small_params):
+    """Stage 2 의 pitch/roll 이 projection.json 으로 남고, Stage 4 시차도 같은 회전으로 펼쳐져 원본 영역 안에 놓인다.
+    (예전에는 Stage 4 · 영상 루프가 pitch 없이 펼쳐 원본 영역과 어긋났다.)"""
+    from vr180.geometry import reproject
+
+    p = {k: dict(v) for k, v in small_params.items()}
+    p["stage_02_reproj"].update({"pitch_offset_deg": 20.0, "roll_deg": 5.0})
+    job = Job.create(sample_sbs, job_id="tilt", params_override=p, input_mode="sbs")
+    job.run(to_stage=4, ctx=_ctx())
+    pj = imageio.read_json(job.path(2, "projection.json"))
+    assert pj["pitch_offset_deg"] == 20.0 and pj["roll_deg"] == 5.0
+    assert np.allclose(reproject.projection_angles(job), (math.radians(20), math.radians(5)))
+    from vr180.geometry import sphere
+
+    valid = imageio.read_mask(job.path(2, "valid_mask.png")) > 127
+    cam = imageio.read_json(job.path(1, "camera.json"))
+    disp_px = np.load(job.path(4, "disp_center.npy"))
+    h, w = disp_px.shape
+    hfov = math.radians(cam["hfov_deg"])
+    f = sphere.focal_px(w, hfov)
+    x_norm = np.broadcast_to(((np.arange(w, dtype=np.float32) + 0.5 - w / 2.0) / f)[None, :], (h, w))
+    disp_rad = sphere.pixel_disparity_to_angular(disp_px, x_norm, f, exact=True)
+    mx, my, inside = reproject.pinhole_to_equi_maps(valid.shape[0], w, h, hfov, math.radians(20), math.radians(5))
+    expected = reproject.remap_float_to_equi(disp_rad, mx, my, inside & valid, fill=0.0)
+    got = np.load(job.path(4, "disp_center_equi.npy"))
+    assert np.abs(got).max() > 0
+    assert np.allclose(got, expected, atol=1e-6)

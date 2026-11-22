@@ -84,3 +84,49 @@ def test_tile_grid_covers_hemisphere():
     # 극 바로 근처(|φ| > 85°) 와 가장자리는 제외하고 거의 전부 덮여야 한다
     region = (np.abs(ph) < math.radians(85)) & (np.abs(th) < math.radians(88))
     assert cov[region].mean() > 0.995
+
+
+def test_tilt_is_true_rotation_roundtrip():
+    """pitch/roll 은 진짜 회전: equirect 픽셀 → 핀홀 좌표 → 방향 → 역회전 하면 원래 (θ, φ) 로 돌아온다.
+    (예전 φ+pitch 방식은 가장자리에서 이 검사에 걸린다.)"""
+    size, w, h = 256, 640, 480
+    hfov = math.radians(80)
+    for pitch, roll in [(math.radians(25), 0.0), (0.0, math.radians(8)), (math.radians(-15), math.radians(-5))]:
+        mx, my, valid = reproject.pinhole_to_equi_maps(size, w, h, hfov, pitch, roll)
+        th, ph = sphere.equi_angle_grid(size)
+        d_cam = sphere.pinhole_to_dir(mx[valid], my[valid], w, h, hfov)
+        d_world = d_cam @ sphere.photo_tilt_matrix(pitch, roll)  # M^T 의 역 = M (직교)
+        t2, p2 = sphere.dir_to_angles(d_world)
+        assert np.abs(t2 - th[valid]).max() < 1e-6
+        assert np.abs(p2 - ph[valid]).max() < 1e-6
+
+
+def test_pitch_puts_equator_above_center_and_roll_tilts_horizon():
+    size, w, h = 512, 640, 480
+    hfov = math.radians(80)
+    f = sphere.focal_px(w, hfov)
+    mx, my, _ = reproject.pinhole_to_equi_maps(size, w, h, hfov, math.radians(20))
+    c = size // 2
+    # VR 정면 (θ≈0, φ≈0) 이 사진 중앙보다 f·tan20° 위를 샘플링
+    assert abs((my[c, c] + 0.5) - (h / 2 - f * math.tan(math.radians(20)))) < 2.0
+    # roll +8°: 사진 속 수평선이 반시계로 기운 것 → VR 수평선이 사진 오른쪽에서 더 위(py 작음)
+    mx, my, _ = reproject.pinhole_to_equi_maps(size, w, h, hfov, 0.0, math.radians(8))
+    th, _ = sphere.equi_angle_grid(size)
+    a, b = np.searchsorted(th[c], math.radians(-20)), np.searchsorted(th[c], math.radians(20))
+    slope = -(my[c, b] - my[c, a]) / (mx[c, b] - mx[c, a])
+    assert abs(math.degrees(math.atan(slope)) - 8) < 0.3
+
+
+def test_pitch_guide_matches_legacy_row_without_roll():
+    from vr180.gui.common import draw_pitch_guide
+
+    rgb = np.zeros((480, 640, 3), np.uint8)
+    out = draw_pitch_guide(rgb, 80, 15)
+    f = 640 / (2 * math.tan(math.radians(40)))
+    row = round(240 - f * math.tan(math.radians(15)))
+    ys = np.flatnonzero((out[:, 320] == (255, 220, 0)).all(axis=1))
+    assert ys.size and abs(np.median(ys) - row) <= 2
+    out = draw_pitch_guide(rgb, 80, 0, 6)
+    yl = np.flatnonzero(out[:, 100, 0] > 200).mean()
+    yr = np.flatnonzero(out[:, 540, 0] > 200).mean()
+    assert yr < yl  # roll + : 오른쪽이 더 위

@@ -106,7 +106,13 @@ class StereoMatcher(BaseModel):
 
 
 class FovEstimator(BaseModel):
-    """RGB uint8 → (hfov_deg, confidence 0..1). 실패하면 (None, 0)."""
+    """RGB uint8 → (hfov_deg, confidence 0..1). 실패하면 (None, 0).
+
+    카메라 기울기도 내는 추정기(GeoCalib)는 estimate_hfov 호출 뒤 last_tilt 에
+    {"pitch_deg", "roll_deg", "pitch_unc_deg", "roll_unc_deg"} 를 남긴다 (pitch + = 위를 봄, roll + = 사진 속 수평선이 반시계).
+    """
+
+    last_tilt: dict | None = None
 
     @abstractmethod
     def estimate_hfov(self, rgb: np.ndarray) -> tuple[float | None, float]: ...

@@ -21,22 +21,40 @@ INTERP = {
 
 
 def pinhole_to_equi_maps(
-    size: int, width: int, height: int, hfov_rad: float, pitch_rad: float = 0.0
+    size: int, width: int, height: int, hfov_rad: float, pitch_rad: float = 0.0, roll_rad: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """equirect 캔버스의 각 픽셀이 핀홀 이미지의 어느 좌표를 샘플링하는지.
 
-    pitch_rad > 0 이면 equirect 적도(φ=0) 가 핀홀 이미지의 윗쪽(= 얼굴 쪽) 을 가리키게
-    된다. 수식은 '샘플링 각도 φ 에 pitch_rad 를 더한 뒤 핀홀 투영': φ'= φ + pitch_rad.
-    equirect (0,0) → 핀홀의 angles_to_dir(0, pitch_rad) → py = cy − f·tan(pitch_rad).
+    pitch_rad > 0 이면 equirect 적도(φ=0) 가 핀홀 이미지의 윗쪽(= 얼굴 쪽) 을 가리키게 된다.
+    roll_rad > 0 이면 사진 속 반시계로 기운 수평선을 바로 세운다. 둘 다 진짜 회전 (sphere.photo_tilt_matrix):
+    equirect (0,0) → 핀홀 py = cy − f·tan(pitch_rad). 기울여 찍은 사진의 키스톤(위로 모이는 세로선)도 같이 펴진다.
+    (2026-11-22 이전은 φ' = φ + pitch 로 위도만 밀어 가장자리에서 틀렸다.)
 
     반환: map_x, map_y (S×S float32), valid (S×S bool).
     """
     theta, phi = sphere.equi_angle_grid(size)
-    d = sphere.angles_to_dir(theta, phi + float(pitch_rad))
+    d = sphere.angles_to_dir(theta, phi)
+    if pitch_rad or roll_rad:
+        d = d @ sphere.photo_tilt_matrix(float(pitch_rad), float(roll_rad)).T
     px, py, inside = sphere.dir_to_pinhole(d, width, height, hfov_rad)
     map_x = np.where(inside, px, -10.0).astype(np.float32)
     map_y = np.where(inside, py, -10.0).astype(np.float32)
     return map_x, map_y, inside
+
+
+def projection_angles(job) -> tuple[float, float]:
+    """Stage 2 가 실제로 쓴 (pitch_rad, roll_rad). Stage 4 · 영상 루프가 같은 remap 을 만들도록 projection.json 을 읽는다.
+    파일이 없으면 (이전 Job) Stage 2 파라미터에서."""
+    path = job.path(2, "projection.json")
+    if path.exists():
+        from vr180.util import imageio
+
+        pj = imageio.read_json(path)
+    else:
+        pj = job.stage_params(2)
+    return math.radians(float(pj.get("pitch_offset_deg", 0.0) or 0.0)), math.radians(
+        float(pj.get("roll_deg", 0.0) or 0.0)
+    )
 
 
 def remap_to_equi(
