@@ -138,8 +138,10 @@ class EncoderPipe:
         fps: float,
         codec: str = "libx265",
         crf: int = 20,
+        pix_fmt: str = "rgb24",
     ):
         _ensure_ffmpeg()
+        self.pix_fmt = pix_fmt  # 파이프로 들어오는 raw 프레임 형식: rgb24 (W·H·3) 또는 yuv420p (W·H·1.5, I420 평면)
         self.src = Path(src)
         self.out = Path(out)
         self.out.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +174,7 @@ class EncoderPipe:
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            self.pix_fmt,
             "-s",
             f"{self.width}x{self.height}",
             "-r",
@@ -196,8 +198,11 @@ class EncoderPipe:
             "-c:a",
             "copy",
             "-shortest",
-            str(self.out),
         ]
+        if "265" in self.codec or "hevc" in self.codec:
+            # hev1 태그는 일부 VR 플레이어가 거부한다. hvc1 (파라미터 셋을 hvcC 에) 로 기록.
+            cmd += ["-tag:v", "hvc1"]
+        cmd.append(str(self.out))
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
         self._stderr_thread.start()

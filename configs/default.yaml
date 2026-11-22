@@ -98,6 +98,8 @@ video:
   depth_model: da2_video  # vda_large | vda_small | da2_video | none
   edge_blend_deg: 1.0     # 원본 영역 경계에서 프레임 → 고정 주변부로 섞는 폭(°). 원본 안쪽으로 이만큼만 침범.
                           # 0 = 경계에서 바로 전환. 예전 기본(stage_06_right.blend_deg=8) 은 원본이 8° 흐려졌다.
+  gpu_remap: true         # CUDA 가 있으면 프레임 재투영·블렌딩을 GPU 에서 (sbs 모드). false = cv2 (CPU)
+  gpu_yuv: true           # GPU 경로에서 yuv420p 평면을 바로 만들어 인코더로 보냄 (파이프 절반, ffmpeg 색변환 생략)
   chunk: 32               # VDA chunk 크기
   overlap: 8              # VDA chunk 겹침
 

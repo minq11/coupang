@@ -43,10 +43,12 @@ def _ref_raw(video_path: str | None, time_sec: float, mode: str, max_side: int =
 
 
 def _default_output_path(input_video: str, mode: str) -> str:
+    """기본 출력 경로. 접미사 `_180_3dh_LR` 은 플레이어 파일명 판별용 (Quest 갤러리·DeoVR·Skybox·Pigasus 가
+    _180 / _3dh / _LR 중 하나 이상을 본다). 메타데이터(st3d/sv3d) 도 같이 넣으므로 이름을 바꿔도 대부분 인식된다."""
     stem = Path(input_video).stem
     outdir = paths.work_dir() / "video_output"
     outdir.mkdir(parents=True, exist_ok=True)
-    return str(outdir / f"{stem}_VR180_SBS_{mode}.mp4")
+    return str(outdir / f"{stem}_{mode}_180_3dh_LR.mp4")
 
 
 def build() -> None:

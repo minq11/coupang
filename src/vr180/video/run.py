@@ -27,6 +27,7 @@ from vr180.pipeline.job import Job
 from vr180.util import imageio
 from vr180.util.log import RunContext
 from vr180.video import frames as _frames
+from vr180.video import spherical
 
 
 def _blend_weight(valid: np.ndarray, blend_px: float) -> np.ndarray:
@@ -37,6 +38,63 @@ def _blend_weight(valid: np.ndarray, blend_px: float) -> np.ndarray:
     return w
 
 
+class _GpuReprojector:
+    """remap(L/R) + blendLinear + hconcat 을 CUDA 에서. CPU 경로(cv2)와 같은 결과를 내되 프레임당 수 ms.
+
+    grid_sample(align_corners=False) 의 정규화 좌표: 픽셀 중심이 (i+0.5)/N*2-1 이라 cv2.remap 의
+    정수 픽셀 중심 좌표와 일치한다. rectify y 이동은 오른눈 grid 에 바로 반영 (warpAffine 생략)."""
+
+    def __init__(self, mx, my, w_in, pano_l, pano_r, half_w: int, H: int, rect_shift: float, yuv: bool = True):
+        import torch
+
+        self.torch = torch
+        dev = torch.device("cuda")
+        self.dev = dev
+        S = w_in.shape[0]
+        gx = (torch.from_numpy(mx).to(dev) + 0.5) / half_w * 2 - 1
+        gy = (torch.from_numpy(my).to(dev) + 0.5) / H * 2 - 1
+        self.grid_l = torch.stack([gx, gy], dim=-1)[None]  # 1×S×S×2
+        if abs(rect_shift) > 1e-3:
+            # warpAffine([[1,0,0],[0,1,shift]]) 는 dst(y) = src(y-shift)
+            gy_r = (torch.from_numpy(my).to(dev) - rect_shift + 0.5) / H * 2 - 1
+            self.grid_r = torch.stack([gx, gy_r], dim=-1)[None]
+        else:
+            self.grid_r = self.grid_l
+        self.w_in = torch.from_numpy(w_in).to(dev)[None, None]  # 1×1×S×S
+        self.pano_l = torch.from_numpy(pano_l).to(dev).permute(2, 0, 1)[None].float() * (1 - self.w_in)
+        self.pano_r = torch.from_numpy(pano_r).to(dev).permute(2, 0, 1)[None].float() * (1 - self.w_in)
+        self.half_w, self.H, self.S = half_w, H, S
+        self.yuv = yuv
+        self.pix_fmt = "yuv420p" if yuv else "rgb24"
+        n = S * 2 * S
+        self.out = torch.empty((n * 3 // 2,) if yuv else (n * 3,), dtype=torch.uint8, pin_memory=True)
+        if yuv:
+            # BT.601 limited range: ffmpeg 가 rgb24 → yuv420p 로 바꿀 때 쓰는 기본 행렬과 같다.
+            self.m_y = torch.tensor([65.481, 128.553, 24.966], device=dev).view(1, 3, 1, 1) / 255
+            self.m_u = torch.tensor([-37.797, -74.203, 112.0], device=dev).view(1, 3, 1, 1) / 255
+            self.m_v = torch.tensor([112.0, -93.786, -18.214], device=dev).view(1, 3, 1, 1) / 255
+
+    def __call__(self, arr) -> bytes:
+        torch = self.torch
+        with torch.no_grad():
+            frame = torch.from_numpy(arr).to(self.dev, non_blocking=True).permute(2, 0, 1)[None].float()
+            left, right = frame[..., : self.half_w], frame[..., self.half_w :]
+            l_equi = torch.nn.functional.grid_sample(left, self.grid_l, mode="bilinear", padding_mode="zeros", align_corners=False)
+            r_equi = torch.nn.functional.grid_sample(right, self.grid_r, mode="bilinear", padding_mode="zeros", align_corners=False)
+            sbs = torch.cat([l_equi * self.w_in + self.pano_l, r_equi * self.w_in + self.pano_r], dim=3)
+            if self.yuv:
+                y = (sbs * self.m_y).sum(1, keepdim=True) + 16
+                half = torch.nn.functional.avg_pool2d(sbs, 2)  # 2×2 평균 후 색차
+                u = (half * self.m_u).sum(1, keepdim=True) + 128
+                v = (half * self.m_v).sum(1, keepdim=True) + 128
+                planes = torch.cat([y.flatten(), u.flatten(), v.flatten()])
+            else:
+                planes = sbs[0].permute(1, 2, 0).flatten()
+            self.out.copy_(planes.add_(0.5).clamp_(0, 255).to(torch.uint8), non_blocking=True)
+            torch.cuda.synchronize(self.dev)
+        return self.out.numpy().tobytes()
+
+
 def _edge_blend_deg(job: Job, params_override: dict | None) -> float:
     """프레임 → 고정 주변부 경계 블렌딩 폭(°). 우선순위: params_override > job.params > 1.0.
     원본 영역 안쪽으로 이 폭만큼만 주변부가 섞인다 (surround Job 재사용 시에도 override 가 먹도록 따로 본다)."""
@@ -44,6 +102,15 @@ def _edge_blend_deg(job: Job, params_override: dict | None) -> float:
     if "edge_blend_deg" in ov:
         return float(ov["edge_blend_deg"])
     return float(job.params.get("video", {}).get("edge_blend_deg", 1.0))
+
+
+def _inject_vr180_metadata(output_video: Path, ctx: RunContext) -> None:
+    """mp4 에 st3d(left-right) + sv3d(equirect 180°) 를 넣어 플레이어가 파일명 없이도 VR180 으로 인식하게."""
+    try:
+        r = spherical.inject_vr180(output_video)
+        ctx.log(f"VR180 메타데이터 삽입: st3d(left-right) + sv3d(equirect 180×180) → {r['sample_entry']}")
+    except Exception as e:  # noqa: BLE001 — 메타데이터 실패로 영상 자체를 버리진 않는다
+        ctx.log(f"⚠️ VR180 메타데이터 삽입 실패 ({e}). 파일명 토큰(_180_3dh_LR) 으로만 인식됨")
 
 
 def _ensure_surround_job(
@@ -225,9 +292,24 @@ def run_video(
     out_w = S * 2
     out_h = S
 
-    # 프레임 처리 함수
+    # 프레임 처리: CUDA 가 있으면 GPU 재투영 (video.gpu_remap=false 로 끌 수 있음), 아니면 cv2.
+    gpu = None
+    if (params_override or {}).get("video", {}).get("gpu_remap", True):
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                gpu = _GpuReprojector(mx, my, w_in, pano_l, pano_r, half_w, H, rect_shift,
+                                      yuv=bool((params_override or {}).get("video", {}).get("gpu_yuv", True)))
+                ctx.log(f"프레임 재투영: CUDA ({gpu.pix_fmt} 출력)")
+        except Exception as exc:  # noqa: BLE001 - CPU 경로로 조용히 내려간다
+            ctx.log(f"GPU 재투영 사용 불가, cv2 로 진행: {exc}")
+            gpu = None
+
     def process_frame(buf: bytes) -> bytes:
         arr = np.frombuffer(buf, dtype=np.uint8).reshape(H, W, 3)
+        if gpu is not None:
+            return gpu(arr)
         left = arr[:, :half_w]
         right = arr[:, half_w:]
         # rectify 보정값: 첫 프레임에서 측정한 y 이동을 모든 프레임의 R 에 그대로.
@@ -247,7 +329,8 @@ def run_video(
     # 메인 루프
     t0 = time.time()
     processed = 0
-    with _frames.EncoderPipe(input_video, output_video, out_w, out_h, V_FPS, codec=codec, crf=crf) as enc:
+    with _frames.EncoderPipe(input_video, output_video, out_w, out_h, V_FPS, codec=codec, crf=crf,
+                             pix_fmt=gpu.pix_fmt if gpu is not None else "rgb24") as enc:
         for i, buf in enumerate(_frames.frame_iter(input_video, W, H)):
             out_buf = process_frame(buf)
             enc.write(out_buf)
@@ -262,6 +345,7 @@ def run_video(
                 if processed % 300 == 0:
                     ctx.log(msg)
     elapsed = time.time() - t0
+    _inject_vr180_metadata(output_video, ctx)
     ctx.log(f"완료: {processed} 프레임, {elapsed:.1f}s ({processed / max(elapsed, 1e-6):.1f} fps) → {output_video}")
     return {
         "input": str(input_video),
@@ -429,6 +513,7 @@ def _run_video_mono(
                     )
                 processed += len(buf_frames)
     elapsed = time.time() - t0
+    _inject_vr180_metadata(output_video, ctx)
     ctx.log(f"[mono] 완료: {processed} 프레임, {elapsed:.1f}s → {output_video}")
     return {
         "input": str(input_video),

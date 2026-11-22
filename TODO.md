@@ -174,7 +174,7 @@ vr180 video -i in.mp4 -o out.mp4 [--ref-frame 0 | --ref-time 1.5] [--surround-jo
 ### 출력 해상도 / 코덱
 - 기본 눈당 2880 → 5760×2880 SBS, H.265, 30fps. Quest 2/3 재생이 안전한 선.
 - 눈당 4096(8192×4096)은 옵션으로만. Quest 에서 끊길 수 있음을 README 에 명시.
-- 파일명 접미사 `_180_3dh` 유지. 영상용 메타데이터(st3d/sv3d 박스)는 열린 결정 — DeoVR/Skybox 에서 180 SBS 수동 설정으로 1차 확인.
+- 파일명 접미사: 사진 `_180_3dh`, 영상 `_180_3dh_LR`. 영상은 인코딩 뒤 `video/spherical.py` 가 mp4 에 st3d(left-right)+sv3d(equirect, 좌우 ±90°) 를 넣는다 (2026-10-19, ffprobe 'Stereo 3D side by side' + 'Spherical Mapping' 확인). HEVC 는 `-tag:v hvc1`. 이전 출력(`_VR180_SBS_sbs.mp4`, 메타 없음)은 플레이어가 VR180 으로 못 알아봤다.
 
 ### 보완 장치 (1차에 넣을 것 / 미룰 것)
 - [1차] **카메라 움직임 경고**: 프레임 간 전역 이동량을 phase correlation(`cv2.phaseCorrelate`)으로 재서 평균이 임계값(기본 2px)을 넘으면 "고정 샷이 아님" 경고.
