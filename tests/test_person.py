@@ -483,3 +483,18 @@ def test_video_mask_edit_reruns_alpha(tmp_path):
     run_person(src, models=PersonModels(detector=None, use_matter=False, use_depth=False), **kw)
     assert (job / "02_alpha" / "meta.json").read_text() != meta1
     assert (imageio.read_mask(job / "02_alpha" / "00003.png")[:, :10] > 200).any()
+
+
+def test_output_names_follow_volumx_rule(tmp_path):
+    from vr180.person.pipeline import output_names, sanitize_filename
+
+    assert sanitize_filename("수야 photo (1)") == "photo_1"
+    assert sanitize_filename("한글만") == "file"
+    a, g = output_names(Path("수야 photo (1).jpg"), tmp_path / "20261123_job", "png")
+    assert a.startswith("photo_1_") and a.endswith("_personar_rgba.png")
+    assert g.startswith("photo_1_") and g.endswith("_LRF_Full_SBS.png")
+    uid = a.split("_")[2]
+    assert len(uid) == 32 and uid in g
+    # 같은 Job 이면 같은 이름, 다른 Job 이면 다른 이름
+    assert output_names(Path("x.jpg"), tmp_path / "20261123_job", "mp4")[0].split("_")[1] == uid
+    assert output_names(Path("x.jpg"), tmp_path / "other", "mp4")[0].split("_")[1] != uid

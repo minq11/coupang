@@ -91,8 +91,8 @@ adb reverse tcp:8080 tcp:8080             # 퀘스트 USB 연결 후. 퀘스트 
 | 좌우 영상 · 인코딩 | 자체 코드 · ffmpeg (HEVC) | |
 | 재생 | three.js r180 (`player/vendor`) WebXR immersive-ar | MIT |
 
-출력 `person_rgba_sbs.mp4` 는 위 절반 [왼눈 컬러 | 오른눈 컬러], 아래 절반 [왼눈 알파 | 오른눈 알파] (layout `rgba_sbs_v1`).
-기존 플레이어용 `person_green_sbs.mp4` (초록 배경 SBS) 도 같이 나온다. 중간 파일(`01_masks`, `02_alpha` …)을 고쳐 덮어쓰고
+출력 `{원본}_{id}_personar_rgba.mp4` 는 위 절반 [왼눈 컬러 | 오른눈 컬러], 아래 절반 [왼눈 알파 | 오른눈 알파] (layout `rgba_sbs_v1`).
+Skybox·DeoVR 등 일반 플레이어용 `{원본}_{id}_LRF_Full_SBS.mp4` (초록 배경 SBS, 파일명으로 3D 좌우 자동 인식) 도 같이 나온다. 이름 규칙은 volumx 와 같다 (ASCII 로 정리한 원본 이름 + 32자 hex id + 형식 태그). 중간 파일(`01_masks`, `02_alpha` …)을 고쳐 덮어쓰고
 같은 `--job-dir` 로 다시 돌리면 그 다음 단계부터 반영된다. 모델 없이 흐름만 보려면
 `vr180 person -i photo.jpg --mask mask.png -s matter=none -s image_depth_model=none`.
 

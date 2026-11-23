@@ -5,8 +5,9 @@
   01_masks/    프레임별 사람 합집합 마스크 PNG + people.json (트랙 목록, 가장 큰 사람 키)
   02_alpha/    프레임별 알파 PNG (경계 다듬기 + 경계 띠 앞뒤 평균)
   03_depth/    프레임별 inverse depth (float16 .npy, 저장용 축소) + stats.json
-  out/         person_rgba_sbs.(png|mp4)  위 컬러 / 아래 알파, 눈당 좌우 (layout rgba_sbs_v1)
-               person_green_sbs.(png|mp4) 초록 배경 SBS (기존 플레이어용)
+  out/         {원본}_{id}_personar_rgba.(png|mp4)  위 컬러 / 아래 알파, 눈당 좌우 (layout rgba_sbs_v1, 우리 플레이어 전용)
+               {원본}_{id}_LRF_Full_SBS.(png|mp4)   초록 배경 SBS (Skybox·DeoVR 등이 파일명으로 3D 좌우 인식)
+               이름 규칙은 volumx 와 같다: ASCII 로 정리한 원본 이름 + 32자 hex id + 형식 태그 (output_names).
                poster.png, preview.png, media.json (플레이어가 읽는 설명서)
 단계마다 meta.json 에 입력·파라미터 지문을 적어 두고, 같으면 건너뛴다. 사용자가 01_masks / 02_alpha 의 PNG 를
 직접 고쳐 덮어써도 다음 단계는 그 파일을 그대로 읽는다.
@@ -16,8 +17,10 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -247,6 +250,37 @@ def _matter(p: dict, models: PersonModels):
     return get_matter(p["matter"], models_cfg())
 
 
+# 형식 태그. 플레이어들은 파일명 토큰으로 배치를 판단한다 (volumx 의 iw3 결과도 _LRF_Full_SBS).
+# rgba 는 우리 플레이어 전용 배치라 SBS / LR / TB 토큰을 일부러 넣지 않는다 (일반 플레이어가 3D 로 오해).
+TAG_GREEN = "LRF_Full_SBS"
+TAG_PACKED = "personar_rgba"
+_LEGACY_NAMES = ("person_rgba_sbs", "person_green_sbs")
+
+
+def sanitize_filename(name: str) -> str:
+    """volumx(backend/app/utils/s3.py) 와 같은 규칙: ASCII 영숫자 · - _ . 만 남기고 나머지는 _, 연속 _ 하나로, 앞뒤 _ . 제거."""
+    safe = "".join(c if ord(c) < 128 and (c.isalnum() or c in "-_.") else "_" for c in name)
+    safe = re.sub(r"_+", "_", safe).strip("_.")
+    return safe or "file"
+
+
+def output_names(src: Path, job_dir: Path, ext: str) -> tuple[str, str]:
+    """(rgba 파일명, 초록 SBS 파일명). volumx 처럼 {원본}_{32자 hex}_{태그}.{ext}.
+    id 는 Job 폴더 이름에서 만들어(uuid5) 같은 Job 을 다시 돌려도 이름이 바뀌지 않는다."""
+    base = sanitize_filename(Path(src).stem)
+    uid = uuid.uuid5(uuid.NAMESPACE_URL, f"vr180-person/{Path(job_dir).name}").hex
+    return f"{base}_{uid}_{TAG_PACKED}.{ext}", f"{base}_{uid}_{TAG_GREEN}.{ext}"
+
+
+def _clean_old_outputs(out: Path, keep: tuple[str, ...]) -> None:
+    """이름 규칙이 바뀌기 전 파일(person_rgba_sbs.*) 이나 원본 이름이 달랐던 이전 결과를 지운다."""
+    for f in out.iterdir():
+        if f.name in keep or not f.is_file():
+            continue
+        if f.stem in _LEGACY_NAMES or f.stem.endswith(("_" + TAG_PACKED, "_" + TAG_GREEN)):
+            f.unlink(missing_ok=True)
+
+
 def _write_media(job_dir: Path, info: dict) -> None:
     imageio.write_json(
         job_dir / "out" / "media.json",
@@ -354,14 +388,16 @@ def _run_image(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
     disp = stereo.disparity_px(inv, mask, lo=st["lo"], hi=st["hi"], t0=_t0(st, p), relief_px=relief)
     left, right = stereo.eye_views(rgb, alpha_u8, disp)
     packed = stereo.pack(left, right)
-    imageio.write_image(out / "person_rgba_sbs.png", packed)
-    imageio.write_image(out / "person_green_sbs.png", stereo.green_sbs(left, right))
+    packed_name, green_name = output_names(src, job_dir, "png")
+    _clean_old_outputs(out, (packed_name, green_name))
+    imageio.write_image(out / packed_name, packed)
+    imageio.write_image(out / green_name, stereo.green_sbs(left, right))
     imageio.write_image(out / "poster.png", packed)
     imageio.write_image(out / "preview.png", stereo.preview(left, right))
     info = {
         "type": "image",
-        "file": "person_rgba_sbs.png",
-        "green_file": "person_green_sbs.png",
+        "file": packed_name,
+        "green_file": green_name,
         "poster": "poster.png",
         "eye_width": W,
         "eye_height": H,
@@ -374,8 +410,8 @@ def _run_image(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
     _write_media(job_dir, info)
     return {
         "kind": "image",
-        "output": str(out / "person_rgba_sbs.png"),
-        "green": str(out / "person_green_sbs.png"),
+        "output": str(out / packed_name),
+        "green": str(out / green_name),
         "preview": str(out / "preview.png"),
         **info,
     }
@@ -536,8 +572,10 @@ def _run_video(src: Path, job_dir: Path, p: dict, models: PersonModels, ctx: Run
         stats["hi"],
         stats["t_front"] if p["convergence"] == "front" else stats["t_mean"],
     )
-    packed_path = out / "person_rgba_sbs.mp4"
-    green_path = out / "person_green_sbs.mp4"
+    packed_name, green_name = output_names(src, job_dir, "mp4")
+    _clean_old_outputs(out, (packed_name, green_name))
+    packed_path = out / packed_name
+    green_path = out / green_name
     dmin, dmax = 0.0, 0.0
     with (
         F.EncoderPipe(src, packed_path, 2 * W, 2 * H, fps, codec=p["codec"], crf=int(p["crf"])) as enc_a,
